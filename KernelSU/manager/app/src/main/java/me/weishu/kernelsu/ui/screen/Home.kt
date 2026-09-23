@@ -157,7 +157,7 @@ private fun TopBar(
     onSettingsClick: () -> Unit
 ) {
     TopAppBar(title = { Text(stringResource(R.string.app_name)) }, actions = {
-        if (kernelVersion.isGKI()) {
+        if (true) {
             IconButton(onClick = onInstallClick) {
                 Icon(
                     imageVector = Icons.Filled.Archive,
@@ -218,7 +218,7 @@ private fun StatusCard(
         Row(modifier = Modifier
             .fillMaxWidth()
             .clickable {
-                if (kernelVersion.isGKI()) {
+                if (true) {
                     onClickInstall()
                 }
             }
@@ -264,7 +264,7 @@ private fun StatusCard(
                     }
                 }
 
-                kernelVersion.isGKI() -> {
+                true -> {
                     Icon(Icons.Outlined.Warning, stringResource(R.string.home_not_installed))
                     Column(Modifier.padding(start = 20.dp)) {
                         Text(
