@@ -75,17 +75,23 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--good-boot", type=Path, required=True,
                     help="last known-good boot image; supplies header and DTB")
-    ap.add_argument("--ksu-boot", type=Path, required=True,
-                    help="boot image containing the newly built KSU kernel")
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--ksu-boot", type=Path,
+                        help="boot image containing the newly built KSU kernel")
+    source.add_argument("--ksu-kernel", type=Path,
+                        help="pure gzip Image.gz produced by the kernel build")
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--required-dtb-symbol", default="aw87329_pa")
     args = ap.parse_args()
 
     good = args.good_boot.read_bytes()
-    ksu = args.ksu_boot.read_bytes()
     display_dtb = validate_baseline(good, "good boot", args.required_dtb_symbol.encode())
-    ksu_dtb, ksu_dtb_offset = trailing_fdt(kernel_blob(ksu))
-    ksu_kernel = kernel_blob(ksu)[:ksu_dtb_offset]
+    if args.ksu_kernel:
+        ksu_kernel = args.ksu_kernel.read_bytes()
+    else:
+        ksu = args.ksu_boot.read_bytes()
+        _ksu_dtb, ksu_dtb_offset = trailing_fdt(kernel_blob(ksu))
+        ksu_kernel = kernel_blob(ksu)[:ksu_dtb_offset]
     if not ksu_kernel.startswith(b"\x1f\x8b"):
         raise ValueError("KSU kernel payload is not gzip")
 

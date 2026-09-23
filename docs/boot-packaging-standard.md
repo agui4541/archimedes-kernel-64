@@ -9,7 +9,7 @@ display/USB-fix boot”为模板；不能用旧 touch DTB、不能只替换壳�
 ```sh
 python3 tools/package_boot_mtk.py \
   --good-boot boot-arm64-display-usbfix-32MiB.img \
-  --ksu-boot boot-kernelsu-raw.img \
+  --ksu-kernel out/arch/arm64/boot/Image.gz \
   --output boot-kernelsu-display-usbfix-32MiB.img
 ```
 

@@ -64,14 +64,7 @@ fn print_usage(program: &str, opts: Options) {
 fn set_identity(uid: u32, gid: u32, groups: &[u32]) {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
-        rustix::process::set_groups(
-            groups
-                .iter()
-                .map(|g| unsafe { Gid::from_raw(*g) })
-                .collect::<Vec<_>>()
-                .as_ref(),
-        )
-        .ok();
+        unsafe { libc::setgroups(groups.len(), groups.as_ptr().cast::<libc::gid_t>()); }
         let gid = unsafe { Gid::from_raw(gid) };
         let uid = unsafe { Uid::from_raw(uid) };
         set_thread_res_gid(gid, gid, gid).ok();
@@ -220,6 +213,8 @@ pub fn root_shell() -> Result<()> {
             let pw = libc::getpwnam(name.as_ptr()).as_ref();
             #[cfg(target_arch = "x86_64")]
             let pw = libc::getpwnam(name.as_ptr() as *const i8).as_ref();
+            #[cfg(target_arch = "arm")]
+            let pw = libc::getpwnam(name.as_ptr()).as_ref();
 
             match pw {
                 Some(pw) => pw.pw_uid,

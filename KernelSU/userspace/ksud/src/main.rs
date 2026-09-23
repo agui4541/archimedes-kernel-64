@@ -6,6 +6,7 @@ mod debug;
 mod defs;
 mod init_event;
 mod ksucalls;
+mod ksu_prctl;
 mod module;
 mod mount;
 mod profile;

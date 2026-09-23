@@ -1,0 +1,101 @@
+loopdev-3 0.5.3
+===============
+Recommended Rust toolchain version: 1.90.0
+Recommended development platform for Python development: Fedora 42
+
+- Increase lowest supported Rust to 1.77.0:
+  https://github.com/stratis-storage/loopdev-3/pull/66
+
+- Directly attach file descriptor via LoopDevice:
+  https://github.com/stratis-storage/loopdev-3/pull/61
+
+- Increase bindgen dependency lower bound to 0.72.0:
+  https://github.com/stratis-storage/loopdev-3/pull/69
+
+- Tidies and Maintenance:
+  https://github.com/stratis-storage/loopdev-3/pull/71
+  https://github.com/stratis-storage/loopdev-3/pull/70
+  https://github.com/stratis-storage/loopdev-3/pull/68
+  https://github.com/stratis-storage/loopdev-3/pull/67
+  https://github.com/stratis-storage/loopdev-3/pull/65
+  https://github.com/stratis-storage/loopdev-3/pull/64
+  https://github.com/stratis-storage/loopdev-3/pull/62
+  https://github.com/stratis-storage/loopdev-3/pull/60
+  https://github.com/stratis-storage/loopdev-3/pull/59
+  https://github.com/stratis-storage/loopdev-3/pull/57
+
+
+loopdev-3 0.5.2
+===============
+Recommended Rust toolchain version: 1.87.0
+Recommended development platform for Python development: Fedora 41
+
+- Increase bindgen dependency lower bound to 0.71.0;
+  allow default features:
+  https://github.com/stratis-storage/loopdev-3/pull/52
+  https://github.com/stratis-storage/loopdev-3/pull/46
+
+- Pin bindgen Rust target version:
+  https://github.com/stratis-storage/loopdev-3/pull/48
+
+- Cargo.toml: Set rust-version to 1.74.0:
+  https://github.com/stratis-storage/loopdev-3/pull/35
+
+- Increase tempfile dependency lower bound to 3.4.0;
+  Increase libc dependency lower bound to 0.2.133:
+  https://github.com/stratis-storage/loopdev-3/pull/22
+
+- Increase tempfile dependency lower bound to 3.3.0:
+  https://github.com/stratis-storage/loopdev-3/pull/21
+
+- Use once_cell instead of lazy_static for lazy statics:
+  https://github.com/stratis-storage/loopdev-3/pull/17
+
+- Tidies and Maintenance:
+  https://github.com/stratis-storage/loopdev-3/pull/55
+  https://github.com/stratis-storage/loopdev-3/pull/54
+  https://github.com/stratis-storage/loopdev-3/pull/53
+  https://github.com/stratis-storage/loopdev-3/pull/51
+  https://github.com/stratis-storage/loopdev-3/pull/50
+  https://github.com/stratis-storage/loopdev-3/pull/49
+  https://github.com/stratis-storage/loopdev-3/pull/47
+  https://github.com/stratis-storage/loopdev-3/pull/45
+  https://github.com/stratis-storage/loopdev-3/pull/44
+  https://github.com/stratis-storage/loopdev-3/pull/43
+  https://github.com/stratis-storage/loopdev-3/pull/42
+  https://github.com/stratis-storage/loopdev-3/pull/40
+  https://github.com/stratis-storage/loopdev-3/pull/39
+  https://github.com/stratis-storage/loopdev-3/pull/38
+  https://github.com/stratis-storage/loopdev-3/pull/37
+  https://github.com/stratis-storage/loopdev-3/pull/36
+  https://github.com/stratis-storage/loopdev-3/pull/34
+  https://github.com/stratis-storage/loopdev-3/pull/33
+  https://github.com/stratis-storage/loopdev-3/pull/32
+  https://github.com/stratis-storage/loopdev-3/pull/31
+  https://github.com/stratis-storage/loopdev-3/pull/30
+  https://github.com/stratis-storage/loopdev-3/pull/29
+  https://github.com/stratis-storage/loopdev-3/pull/28
+  https://github.com/stratis-storage/loopdev-3/pull/27
+  https://github.com/stratis-storage/loopdev-3/pull/26
+  https://github.com/stratis-storage/loopdev-3/pull/25
+  https://github.com/stratis-storage/loopdev-3/pull/24
+  https://github.com/stratis-storage/loopdev-3/pull/23
+  https://github.com/stratis-storage/loopdev-3/pull/20
+  https://github.com/stratis-storage/loopdev-3/pull/19
+  https://github.com/stratis-storage/loopdev-3/pull/18
+  https://github.com/stratis-storage/loopdev-3/pull/16
+  https://github.com/stratis-storage/loopdev-3/pull/14
+  https://github.com/stratis-storage/loopdev-3/pull/13
+  https://github.com/stratis-storage/loopdev-3/pull/11
+
+
+loopdev-3 0.5.1
+===============
+Recommended Rust toolchain version: 1.76.0
+Recommended development platform for Python development: Fedora 38
+
+- Increase bindgen dependency lower bound to 0.69.0:
+  https://github.com/stratis-storage/loopdev-3/pull/9
+
+- Tidies and Maintenance:
+  https://github.com/stratis-storage/loopdev-3/pull/8

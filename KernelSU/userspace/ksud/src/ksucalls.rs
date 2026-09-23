@@ -4,7 +4,7 @@ const EVENT_MODULE_MOUNTED: u64 = 3;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn get_version() -> i32 {
-    rustix::process::ksu_get_version()
+    crate::ksu_prctl::get_version()
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -14,7 +14,7 @@ pub fn get_version() -> i32 {
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn report_event(event: u64) {
-    rustix::process::ksu_report_event(event)
+    crate::ksu_prctl::report_event(event)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -22,7 +22,7 @@ fn report_event(_event: u64) {}
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn check_kernel_safemode() -> bool {
-    rustix::process::ksu_check_kernel_safemode()
+    crate::ksu_prctl::check_kernel_safemode()
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
