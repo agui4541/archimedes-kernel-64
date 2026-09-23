@@ -24,7 +24,7 @@ cmaker {
         )
         cFlags.addAll(flags)
         cppFlags.addAll(flags)
-        abiFilters("arm64-v8a", "x86_64")
+        abiFilters("armeabi-v7a")
     }
     buildTypes {
         if (it.name == "release") {
