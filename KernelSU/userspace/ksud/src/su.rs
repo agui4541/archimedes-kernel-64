@@ -20,7 +20,7 @@ use rustix::{
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn grant_root(global_mnt: bool) -> Result<()> {
     const KERNEL_SU_OPTION: u32 = 0xDEAD_BEEF;
-    const CMD_GRANT_ROOT: u64 = 0;
+    const CMD_GRANT_ROOT: libc::c_ulong = 0;
 
     let mut result: u32 = 0;
     unsafe {
