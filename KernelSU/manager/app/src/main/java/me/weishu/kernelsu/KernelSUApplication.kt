@@ -5,6 +5,7 @@ import coil.Coil
 import coil.ImageLoader
 import me.zhanghai.android.appiconloader.coil.AppIconFetcher
 import me.zhanghai.android.appiconloader.coil.AppIconKeyer
+import me.weishu.kernelsu.ui.util.DisplayScale
 import java.io.File
 
 lateinit var ksuApp: KernelSUApplication
@@ -14,6 +15,7 @@ class KernelSUApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         ksuApp = this
+        DisplayScale.initialize(this)
 
         val context = this
         val iconSize = resources.getDimensionPixelSize(android.R.dimen.app_icon_size)

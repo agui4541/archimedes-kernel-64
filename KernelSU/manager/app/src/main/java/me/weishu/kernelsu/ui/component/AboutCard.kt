@@ -86,7 +86,7 @@ private fun AboutCardContent() {
                     fontSize = 18.sp
                 )
                 Text(
-                    BuildConfig.VERSION_NAME,
+                    "${BuildConfig.VERSION_NAME} (modified)",
                     style = MaterialTheme.typography.bodySmall,
                     fontSize = 14.sp
                 )

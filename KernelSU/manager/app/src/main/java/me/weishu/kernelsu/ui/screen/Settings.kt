@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Fence
+import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.RemoveModerator
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Share
@@ -79,6 +80,7 @@ import me.weishu.kernelsu.ui.component.rememberCustomDialog
 import me.weishu.kernelsu.ui.component.rememberLoadingDialog
 import me.weishu.kernelsu.ui.screen.destinations.AppProfileTemplateScreenDestination
 import me.weishu.kernelsu.ui.screen.destinations.FlashScreenDestination
+import me.weishu.kernelsu.ui.util.DisplayScale
 import me.weishu.kernelsu.ui.util.getBugreportFile
 import me.weishu.kernelsu.ui.util.getFileNameFromUri
 import me.weishu.kernelsu.ui.util.shrinkModules
@@ -153,6 +155,53 @@ fun SettingScreen(navigator: DestinationsNavigator) {
             ) {
                 prefs.edit().putBoolean("check_update", it).apply()
                 checkUpdate = it
+            }
+
+            var showDisplayScaleSheet by rememberSaveable { mutableStateOf(false) }
+            ListItem(
+                leadingContent = {
+                    Icon(
+                        Icons.Filled.FormatSize,
+                        stringResource(id = R.string.settings_display_scale)
+                    )
+                },
+                headlineContent = { Text(stringResource(R.string.settings_display_scale)) },
+                supportingContent = {
+                    Text(
+                        stringResource(
+                            R.string.settings_display_scale_summary,
+                            DisplayScale.label(DisplayScale.value)
+                        )
+                    )
+                },
+                modifier = Modifier.clickable { showDisplayScaleSheet = true }
+            )
+            if (showDisplayScaleSheet) {
+                ModalBottomSheet(
+                    onDismissRequest = { showDisplayScaleSheet = false }
+                ) {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            text = stringResource(R.string.settings_display_scale_title),
+                            modifier = Modifier.padding(24.dp, 16.dp, 24.dp, 8.dp),
+                            style = androidx.compose.material3.MaterialTheme.typography.titleMedium
+                        )
+                        DisplayScale.options.forEach { scale ->
+                            ListItem(
+                                headlineContent = { Text(DisplayScale.label(scale)) },
+                                supportingContent = if (scale == DisplayScale.value) {
+                                    { Text(stringResource(R.string.settings_display_scale_current)) }
+                                } else null,
+                                modifier = Modifier.clickable {
+                                    DisplayScale.set(context, scale)
+                                    showDisplayScaleSheet = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
 
             var enableWebDebugging by rememberSaveable {

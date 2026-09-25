@@ -131,4 +131,8 @@
     <string name="flash_failed">Flash failed</string>
     <string name="selected_lkm">Selected lkm: %s</string>
     <string name="save_log">Save Logs</string>
+    <string name="settings_display_scale">App display size</string>
+    <string name="settings_display_scale_summary">Only affects KernelSU Manager (current %1$s)</string>
+    <string name="settings_display_scale_title">Choose app display size</string>
+    <string name="settings_display_scale_current">Current</string>
 </resources>

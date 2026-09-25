@@ -17,6 +17,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
@@ -28,6 +30,7 @@ import me.weishu.kernelsu.ksuApp
 import me.weishu.kernelsu.ui.screen.BottomBarDestination
 import me.weishu.kernelsu.ui.screen.NavGraphs
 import me.weishu.kernelsu.ui.theme.KernelSUTheme
+import me.weishu.kernelsu.ui.util.DisplayScale
 import me.weishu.kernelsu.ui.util.LocalSnackbarHost
 import me.weishu.kernelsu.ui.util.rootAvailable
 
@@ -38,20 +41,26 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             KernelSUTheme {
-                val navController = rememberNavController()
-                val snackbarHostState = remember { SnackbarHostState() }
-                Scaffold(
-                    bottomBar = { BottomBar(navController) },
-                    snackbarHost = { SnackbarHost(snackbarHostState) }
-                ) { innerPadding ->
-                    CompositionLocalProvider(
-                        LocalSnackbarHost provides snackbarHostState,
-                    ) {
-                        DestinationsNavHost(
-                            modifier = Modifier.padding(innerPadding),
-                            navGraph = NavGraphs.root,
-                            navController = navController
-                        )
+                val baseDensity = LocalDensity.current
+                val scaledDensity = remember(baseDensity, DisplayScale.value) {
+                    Density(baseDensity.density * DisplayScale.value, baseDensity.fontScale)
+                }
+                CompositionLocalProvider(LocalDensity provides scaledDensity) {
+                    val navController = rememberNavController()
+                    val snackbarHostState = remember { SnackbarHostState() }
+                    Scaffold(
+                        bottomBar = { BottomBar(navController) },
+                        snackbarHost = { SnackbarHost(snackbarHostState) }
+                    ) { innerPadding ->
+                        CompositionLocalProvider(
+                            LocalSnackbarHost provides snackbarHostState,
+                        ) {
+                            DestinationsNavHost(
+                                modifier = Modifier.padding(innerPadding),
+                                navGraph = NavGraphs.root,
+                                navController = navController
+                            )
+                        }
                     }
                 }
             }
