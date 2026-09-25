@@ -44,7 +44,7 @@ static char __user *sh_user_path(void)
 
 static char __user *ksud_user_path(void)
 {
-	static const char ksud_path[] = KSUD_PATH;
+	static const char ksud_path[] = KSUD_EXEC_PATH;
 
 	return userspace_stack_buffer(ksud_path, sizeof(ksud_path));
 }
@@ -116,7 +116,7 @@ int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
 				 int *__never_use_flags)
 {
 	struct filename *filename;
-	const char sh[] = KSUD_PATH;
+	const char sh[] = KSUD_EXEC_PATH;
 	const char su[] = SU_PATH;
 
 	if (unlikely(!filename_ptr))
@@ -270,6 +270,69 @@ static int sys_execve_handler_pre(struct kprobe *p, struct pt_regs *regs)
 					  NULL);
 }
 
+#if defined(__aarch64__)
+/* Android on this target is a 32-bit userspace on an arm64 kernel. */
+static int compat_sys_execve_handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+        struct pt_regs *real_regs = PT_REAL_REGS(regs);
+        const char __user **filename_user =
+                (const char __user **)&PT_REGS_PARM1(real_regs);
+
+        return ksu_handle_execve_sucompat(AT_FDCWD, filename_user, NULL, NULL,
+                                           NULL);
+}
+static int compat_sys_execveat_handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+	struct pt_regs *real_regs = PT_REAL_REGS(regs);
+	int *fd = (int *)&PT_REGS_PARM1(real_regs);
+	const char __user **filename_user =
+		(const char __user **)&PT_REGS_PARM2(real_regs);
+
+	return ksu_handle_execve_sucompat(fd, filename_user, NULL, NULL, NULL);
+}
+
+static struct kprobe compat_execve_kp = {
+	.symbol_name = "compat_sys_execve",
+	.pre_handler = compat_sys_execve_handler_pre,
+};
+static struct kprobe compat_execveat_kp = {
+	.symbol_name = "compat_sys_execveat",
+	.pre_handler = compat_sys_execveat_handler_pre,
+};
+static int compat_sys_newfstatat_handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+        struct pt_regs *real_regs = PT_REAL_REGS(regs);
+        int *dfd = (int *)&PT_REGS_PARM1(real_regs);
+        const char __user **filename_user =
+                (const char __user **)&PT_REGS_PARM2(real_regs);
+        return ksu_handle_stat(dfd, filename_user, NULL);
+}
+
+static int compat_sys_fstatat64_handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+        struct pt_regs *real_regs = PT_REAL_REGS(regs);
+        int *dfd = (int *)&PT_REGS_PARM1(real_regs);
+        const char __user **filename_user =
+                (const char __user **)&PT_REGS_PARM2(real_regs);
+
+        return ksu_handle_stat(dfd, filename_user, NULL);
+}
+
+static struct kprobe compat_newfstatat_kp = {
+	.symbol_name = "compat_sys_newfstatat",
+	.pre_handler = compat_sys_newfstatat_handler_pre,
+};
+static struct kprobe compat_fstatat64_kp = {
+        .symbol_name = "sys_fstatat64",
+        .pre_handler = compat_sys_fstatat64_handler_pre,
+};
+/* compat arm32 maps faccessat directly to the common sys_faccessat symbol. */
+static struct kprobe compat_faccessat_kp = {
+	.symbol_name = "sys_faccessat",
+	.pre_handler = faccessat_handler_pre,
+};
+#endif
+
 #if 1
 static struct kprobe faccessat_kp = {
 	.symbol_name = SYS_FACCESSAT_SYMBOL,
@@ -347,10 +410,26 @@ void ksu_sucompat_init()
 	int ret;
 	ret = register_kprobe(&execve_kp);
 	pr_info("sucompat: execve_kp: %d\n", ret);
+#if defined(__aarch64__)
+	ret = register_kprobe(&compat_execve_kp);
+	pr_info("sucompat: compat_execve_kp: %d\n", ret);
+	ret = register_kprobe(&compat_execveat_kp);
+	pr_info("sucompat: compat_execveat_kp: %d\n", ret);
+#endif
 	ret = register_kprobe(&newfstatat_kp);
 	pr_info("sucompat: newfstatat_kp: %d\n", ret);
+#if defined(__aarch64__)
+	ret = register_kprobe(&compat_newfstatat_kp);
+	pr_info("sucompat: compat_newfstatat_kp: %d\n", ret);
+        ret = register_kprobe(&compat_fstatat64_kp);
+        pr_info("sucompat: compat_fstatat64_kp: %d\n", ret);
+#endif
 	ret = register_kprobe(&faccessat_kp);
 	pr_info("sucompat: faccessat_kp: %d\n", ret);
+#if defined(__aarch64__)
+	ret = register_kprobe(&compat_faccessat_kp);
+	pr_info("sucompat: compat_faccessat_kp: %d\n", ret);
+#endif
 	ret = register_kprobe(&pts_unix98_lookup_kp);
 	pr_info("sucompat: devpts_kp: %d\n", ret);
 #endif
@@ -360,8 +439,19 @@ void ksu_sucompat_exit()
 {
 #ifdef CONFIG_KPROBES
 	unregister_kprobe(&execve_kp);
+#if defined(__aarch64__)
+	unregister_kprobe(&compat_execve_kp);
+	unregister_kprobe(&compat_execveat_kp);
+#endif
 	unregister_kprobe(&newfstatat_kp);
+#if defined(__aarch64__)
+	unregister_kprobe(&compat_newfstatat_kp);
+        unregister_kprobe(&compat_fstatat64_kp);
+#endif
 	unregister_kprobe(&faccessat_kp);
+#if defined(__aarch64__)
+	unregister_kprobe(&compat_faccessat_kp);
+#endif
 	unregister_kprobe(&pts_unix98_lookup_kp);
 #endif
 }

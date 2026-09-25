@@ -45,6 +45,11 @@ void apply_kernelsu_rules()
 	rcu_read_lock();
 	struct policydb *db = get_policydb();
 
+	if (!ksu_exists(db, KERNEL_SU_DOMAIN)) {
+		pr_info("KernelSU: adding missing su domain\n");
+		ksu_type(db, KERNEL_SU_DOMAIN, "domain");
+	}
+
 	ksu_permissive(db, KERNEL_SU_DOMAIN);
 	ksu_typeattribute(db, KERNEL_SU_DOMAIN, "mlstrustedsubject");
 	ksu_typeattribute(db, KERNEL_SU_DOMAIN, "netdomain");
@@ -89,7 +94,11 @@ void apply_kernelsu_rules()
 	ksu_allow(db, "kernel", "system_data_file", "dir", ALL);
 	// our ksud triggered by init
 	ksu_allow(db, "init", "adb_data_file", "file", ALL);
+	ksu_allow(db, "init", "adb_data_file", "file", "execute_no_trans");
 	ksu_allow(db, "init", "adb_data_file", "dir", ALL); // #1289
+	ksu_allow(db, "init", "cache_file", "file", ALL);
+	ksu_allow(db, "init", "cache_file", "dir", ALL);
+	ksu_allow(db, "init", "cache_file", "file", "execute_no_trans");
 	ksu_allow(db, "init", KERNEL_SU_DOMAIN, ALL, ALL);
 	// we need to umount modules in zygote
 	ksu_allow(db, "zygote", "adb_data_file", "dir", "search");

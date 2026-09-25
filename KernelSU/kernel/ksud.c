@@ -33,19 +33,23 @@ static const char KERNEL_SU_RC[] =
 	"on post-fs-data\n"
 	"    start logd\n"
 	// We should wait for the post-fs-data finish
-	"    exec u:r:su:s0 root -- " KSUD_PATH " post-fs-data\n"
+	"    exec u:r:init:s0 root -- /system/bin/toybox cp -p " KSUD_PATH " " KSUD_EXEC_PATH "\n"
+	"    exec u:r:su:s0 root -- " KSUD_EXEC_PATH " post-fs-data\n"
 	"\n"
 
 	"on nonencrypted\n"
-	"    exec u:r:su:s0 root -- " KSUD_PATH " services\n"
+	"    exec u:r:init:s0 root -- /system/bin/toybox cp -p " KSUD_PATH " " KSUD_EXEC_PATH "\n"
+	"    exec u:r:su:s0 root -- " KSUD_EXEC_PATH " services\n"
 	"\n"
 
 	"on property:vold.decrypt=trigger_restart_framework\n"
-	"    exec u:r:su:s0 root -- " KSUD_PATH " services\n"
+	"    exec u:r:init:s0 root -- /system/bin/toybox cp -p " KSUD_PATH " " KSUD_EXEC_PATH "\n"
+	"    exec u:r:su:s0 root -- " KSUD_EXEC_PATH " services\n"
 	"\n"
 
 	"on property:sys.boot_completed=1\n"
-	"    exec u:r:su:s0 root -- " KSUD_PATH " boot-completed\n"
+	"    exec u:r:init:s0 root -- /system/bin/toybox cp -p " KSUD_PATH " " KSUD_EXEC_PATH "\n"
+	"    exec u:r:su:s0 root -- " KSUD_EXEC_PATH " boot-completed\n"
 	"\n"
 
 	"\n";
@@ -382,6 +386,11 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 		return 0;
 	}
 
+	/* The target uses 32-bit init; apply dynamic SELinux rules before init
+	 * executes the injected ksud actions. */
+	apply_kernelsu_rules();
+	pr_info("applied KernelSU SELinux rules from atrace.rc hook; defer post-fs-data\n");
+
 	// we've succeed to insert ksud.rc, now we need to proxy the read and modify the result!
 	// But, we can not modify the file_operations directly, because it's in read-only memory.
 	// We just replace the whole file_operations with a proxy one.
@@ -514,6 +523,30 @@ static int sys_execve_handler_pre(struct kprobe *p, struct pt_regs *regs)
 					NULL);
 }
 
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+/* 32-bit init uses compat_sys_execve on this arm64 kernel. */
+static int compat_sys_execve_handler_pre(struct kprobe *p, struct pt_regs *regs)
+{
+        struct pt_regs *real_regs = PT_REAL_REGS(regs);
+        const char __user **filename_user = (const char **)&PT_REGS_PARM1(real_regs);
+        const compat_uptr_t __user *__argv = (const compat_uptr_t __user *)PT_REGS_PARM2(real_regs);
+        struct user_arg_ptr argv = { .is_compat = true, .ptr.compat = __argv };
+        struct filename filename_in, *filename_p;
+        char path[32];
+        if (!filename_user)
+                return 0;
+        memset(path, 0, sizeof(path));
+        ksu_strncpy_from_user_nofault(path, *filename_user, 32);
+        filename_in.name = path;
+        filename_p = &filename_in;
+        return ksu_handle_execveat_ksud(AT_FDCWD, &filename_p, &argv, NULL, NULL);
+}
+static struct kprobe compat_ksud_execve_kp = {
+        .symbol_name = "compat_sys_execve",
+        .pre_handler = compat_sys_execve_handler_pre,
+};
+#endif
+
 // remove this later!
 __maybe_unused static int vfs_read_handler_pre(struct kprobe *p,
 					       struct pt_regs *regs)
@@ -643,6 +676,11 @@ void ksu_ksud_init()
 	ret = register_kprobe(&execve_kp);
 	pr_info("ksud: execve_kp: %d\n", ret);
 
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+        ret = register_kprobe(&compat_ksud_execve_kp);
+        pr_info("ksud: compat_execve_kp: %d\n", ret);
+#endif
+
 	ret = register_kprobe(&vfs_read_kp);
 	pr_info("ksud: vfs_read_kp: %d\n", ret);
 
@@ -659,6 +697,9 @@ void ksu_ksud_exit()
 {
 #ifdef CONFIG_KPROBES
 	unregister_kprobe(&execve_kp);
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+        unregister_kprobe(&compat_ksud_execve_kp);
+#endif
 	// this should be done before unregister vfs_read_kp
 	// unregister_kprobe(&vfs_read_kp);
 	unregister_kprobe(&input_event_kp);
