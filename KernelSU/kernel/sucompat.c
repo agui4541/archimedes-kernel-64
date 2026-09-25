@@ -292,11 +292,11 @@ static int compat_sys_execveat_handler_pre(struct kprobe *p, struct pt_regs *reg
 }
 
 static struct kprobe compat_execve_kp = {
-	.symbol_name = "compat_sys_execve",
+	.symbol_name = "compat_SyS_execve",
 	.pre_handler = compat_sys_execve_handler_pre,
 };
 static struct kprobe compat_execveat_kp = {
-	.symbol_name = "compat_sys_execveat",
+	.symbol_name = "compat_SyS_execveat",
 	.pre_handler = compat_sys_execveat_handler_pre,
 };
 static int compat_sys_newfstatat_handler_pre(struct kprobe *p, struct pt_regs *regs)
@@ -319,16 +319,16 @@ static int compat_sys_fstatat64_handler_pre(struct kprobe *p, struct pt_regs *re
 }
 
 static struct kprobe compat_newfstatat_kp = {
-	.symbol_name = "compat_sys_newfstatat",
+	.symbol_name = "compat_SyS_newfstatat",
 	.pre_handler = compat_sys_newfstatat_handler_pre,
 };
 static struct kprobe compat_fstatat64_kp = {
-        .symbol_name = "sys_fstatat64",
+        .symbol_name = "SyS_fstatat64",
         .pre_handler = compat_sys_fstatat64_handler_pre,
 };
 /* compat arm32 maps faccessat directly to the common sys_faccessat symbol. */
 static struct kprobe compat_faccessat_kp = {
-	.symbol_name = "sys_faccessat",
+	.symbol_name = "SyS_faccessat",
 	.pre_handler = faccessat_handler_pre,
 };
 #endif
@@ -343,7 +343,7 @@ static struct kprobe faccessat_kp = {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 17, 0)
 	.symbol_name = "do_faccessat",
 #else
-	.symbol_name = "sys_faccessat",
+	.symbol_name = "SyS_faccessat",
 #endif
 	.pre_handler = faccessat_handler_pre,
 };

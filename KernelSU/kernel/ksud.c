@@ -542,7 +542,7 @@ static int compat_sys_execve_handler_pre(struct kprobe *p, struct pt_regs *regs)
         return ksu_handle_execveat_ksud(AT_FDCWD, &filename_p, &argv, NULL, NULL);
 }
 static struct kprobe compat_ksud_execve_kp = {
-        .symbol_name = "compat_sys_execve",
+        .symbol_name = "compat_SyS_execve",
         .pre_handler = compat_sys_execve_handler_pre,
 };
 #endif
