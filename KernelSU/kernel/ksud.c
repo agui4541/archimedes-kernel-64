@@ -596,7 +596,10 @@ static struct kprobe execve_kp = {
 };
 #endif
 
-#if 1
+/* Hook the common VFS entry point. Android 9's 32-bit init reaches this
+ * through the compat syscall table, while the syscall symbol itself varies
+ * between vendor 4.9 trees (SyS_read/sys_read). */
+#if 0
 static struct kprobe vfs_read_kp = {
 	.symbol_name = SYS_READ_SYMBOL,
 	.pre_handler = sys_read_handler_pre,
