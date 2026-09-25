@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.tooling.preview.Preview
@@ -74,6 +75,7 @@ fun FlashScreen(navigator: DestinationsNavigator, flashIt: FlashIt) {
     var showFloatAction by rememberSaveable { mutableStateOf(false) }
 
     val snackBarHost = LocalSnackbarHost.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
     var flashing by rememberSaveable {
@@ -114,12 +116,28 @@ fun FlashScreen(navigator: DestinationsNavigator, flashIt: FlashIt) {
                     scope.launch {
                         val format = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss", Locale.getDefault())
                         val date = format.format(Date())
-                        val file = File(
-                            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                            "KernelSU_install_log_${date}.log"
-                        )
-                        file.writeText(logContent.toString())
-                        snackBarHost.showSnackbar("Log saved to ${file.absolutePath}")
+                        val fileName = "KernelSU_install_log_${date}.log"
+                        val result = runCatching {
+                            withContext(Dispatchers.IO) {
+                                // Android 9 has no scoped-storage MediaStore path and this app
+                                // intentionally requests no storage permission. Keep the log in
+                                // the app's external Downloads directory instead of crashing on a
+                                // direct write to /storage/emulated/0/Download.
+                                val directory = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                                    ?: context.filesDir
+                                directory.mkdirs()
+                                File(directory, fileName).apply {
+                                    writeText(logContent.toString())
+                                }
+                            }
+                        }
+                        result.onSuccess { file ->
+                            snackBarHost.showSnackbar("Log saved to ${file.absolutePath}")
+                        }.onFailure { error ->
+                            snackBarHost.showSnackbar(
+                                "Failed to save log: ${error.message ?: error.javaClass.simpleName}"
+                            )
+                        }
                     }
                 }
             )
