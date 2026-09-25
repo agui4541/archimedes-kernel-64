@@ -34,22 +34,22 @@ static const char KERNEL_SU_RC[] =
 	"    start logd\n"
 	// We should wait for the post-fs-data finish
 	"    exec u:r:init:s0 root -- /system/bin/toybox cp -p " KSUD_PATH " " KSUD_EXEC_PATH "\n"
-	"    exec u:r:su:s0 root -- " KSUD_EXEC_PATH " post-fs-data\n"
+	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " post-fs-data\n"
 	"\n"
 
 	"on nonencrypted\n"
 	"    exec u:r:init:s0 root -- /system/bin/toybox cp -p " KSUD_PATH " " KSUD_EXEC_PATH "\n"
-	"    exec u:r:su:s0 root -- " KSUD_EXEC_PATH " services\n"
+	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " services\n"
 	"\n"
 
 	"on property:vold.decrypt=trigger_restart_framework\n"
 	"    exec u:r:init:s0 root -- /system/bin/toybox cp -p " KSUD_PATH " " KSUD_EXEC_PATH "\n"
-	"    exec u:r:su:s0 root -- " KSUD_EXEC_PATH " services\n"
+	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " services\n"
 	"\n"
 
 	"on property:sys.boot_completed=1\n"
 	"    exec u:r:init:s0 root -- /system/bin/toybox cp -p " KSUD_PATH " " KSUD_EXEC_PATH "\n"
-	"    exec u:r:su:s0 root -- " KSUD_EXEC_PATH " boot-completed\n"
+	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " boot-completed\n"
 	"\n"
 
 	"\n";
