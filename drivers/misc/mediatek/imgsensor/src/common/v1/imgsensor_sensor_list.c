@@ -23,6 +23,11 @@
  *     mediatek\custom\common\hal\imgsensor\src\sensorlist.cpp
  */
 struct IMGSENSOR_INIT_FUNC_LIST kdSensorList[MAX_NUM_OF_SUPPORT_SENSOR] = {
+#if defined(GC5035_MIPI_RAW)
+        {GC5035_SENSOR_ID,
+        SENSOR_DRVNAME_GC5035MIPI_RAW,
+        GC5035MIPI_RAW_SensorInit},
+#endif
 	/*IMX*/
 #if defined(IMX499_MIPI_RAW)
 		{IMX499_SENSOR_ID,
