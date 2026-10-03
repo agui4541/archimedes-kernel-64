@@ -2,9 +2,9 @@
  * Giantec GT9772AF voice coil motor driver for the legacy MediaTek
  * main-lens framework.
  *
- * GT97xx exposes a 10-bit DAC at registers 0x03 (MSB) and 0x04 (LSB),
- * and a ring/power register at 0x02. The retail camera HAL names this
- * actuator GT9772AF.
+ * GT9772 exposes a 10-bit DAC at registers 0x03 (MSB) and 0x04 (LSB).
+ * The retail MediaTek driver writes those registers as two separate I2C
+ * transactions and enables the device's advance mode with 0xED=0xAB.
  */
 #include <linux/delay.h>
 #include <linux/fs.h>
@@ -16,6 +16,8 @@
 #define AF_DRVNAME "GT9772AF_DRV"
 #define AF_I2C_SLAVE_ADDR 0x18
 #define GT9772AF_MAX_POSITION 1023
+#define GT9772AF_ADVANCE_REG 0xed
+#define GT9772AF_ADVANCE_VALUE 0xab
 
 #define LOG_INF(format, args...) \
 	pr_info(AF_DRVNAME " [%s] " format, __func__, ##args)
@@ -55,17 +57,23 @@ static int gt9772af_write_reg(u8 reg, u8 value)
 
 static int gt9772af_write_position(unsigned long position)
 {
-	char cmd[3];
+	u8 msb;
+	u8 lsb;
+	int ret;
 
 	if (position > GT9772AF_MAX_POSITION)
 		position = GT9772AF_MAX_POSITION;
 
-	/* GT97xx uses an 8-bit register address followed by a 16-bit DAC. */
-	cmd[0] = 0x03;
-	cmd[1] = (position >> 8) & 0x03;
-	cmd[2] = position & 0xff;
-	gt9772af_select_client();
-	return i2c_master_send(g_pstAF_I2Cclient, cmd, 3) == 3 ? 0 : -EIO;
+	/* The factory driver sends MSB and LSB as separate register writes. */
+	msb = (position >> 8) & 0x03;
+	lsb = position & 0xff;
+	ret = gt9772af_write_reg(0x03, msb);
+	if (ret)
+		return ret;
+	ret = gt9772af_write_reg(0x04, lsb);
+	if (ret)
+		return ret;
+	return 0;
 }
 
 static inline int getAFInfo(__user struct stAF_MotorInfo *user_info)
@@ -92,12 +100,11 @@ static int initAF(void)
 	if (*g_pAF_Opened != 1)
 		return 0;
 
-	/* Direct mode, powered up. Do not require a silicon ID: GT9772
-	 * revisions report different IDs, while the DAC protocol is shared. */
-	ret = gt9772af_write_reg(0x02, 0x00);
+	/* Match the retail driver: enter the actuator's advance mode. */
+	ret = gt9772af_write_reg(GT9772AF_ADVANCE_REG,
+		GT9772AF_ADVANCE_VALUE);
 	if (ret)
 		return ret;
-	msleep(1);
 	if (!gt9772af_read_reg(0x00, &id))
 		LOG_INF("chip id 0x%02x\n", id);
 
@@ -158,13 +165,6 @@ long GT9772AF_Ioctl(struct file *file, unsigned int command,
 
 int GT9772AF_Release(struct inode *inode, struct file *file)
 {
-	if (*g_pAF_Opened == 2) {
-		/* Return to a safe optical position before powering down. */
-		gt9772af_write_position(g_u4AF_INF);
-		msleep(1);
-		gt9772af_write_reg(0x02, 0x01);
-	}
-
 	if (*g_pAF_Opened) {
 		spin_lock(g_pAF_SpinLock);
 		*g_pAF_Opened = 0;

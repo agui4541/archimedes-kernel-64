@@ -32,7 +32,7 @@
 	atag,videolfb-islcm_inited = <0>;
 	atag,videolfb-fps= <6000>;
 	atag,videolfb-vramSize= <0x017bb000>;
-	atag,videolfb-lcmname= "nt35521_hd_dsi_vdo_truly_rt5081_drv";
+	atag,videolfb-lcmname= "otm8019a_boe_wvga";
 };
 
 &odm {
