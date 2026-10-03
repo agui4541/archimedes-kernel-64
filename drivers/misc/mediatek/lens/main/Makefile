@@ -60,6 +60,7 @@ MAIN_CFILES  += common/lc898122af/OisIni.c
 MAIN_CFILES  += common/ad5820af/AD5820AF.c
 MAIN_CFILES  += common/wv511aaf/WV511AAF.c
 MAIN_CFILES  += common/ak7371af/AK7371AF.c
+MAIN_CFILES  += common/gt9772af/GT9772AF.c
 ifeq ($(CONFIG_MTK_LENS_BU63165AF_SUPPORT), y)
 MAIN_CFILES  += common/bu63165af/BU63165AF.c
 MAIN_CFILES  += common/bu63165af/OIS_func.c
@@ -97,6 +98,7 @@ obj-y  += common/lc898217afc/
 obj-y  += common/lc898122af/
 obj-y  += common/wv511aaf/
 obj-y  += common/ak7371af/
+obj-y  += common/gt9772af/
 ifeq ($(CONFIG_MTK_LENS_BU63165AF_SUPPORT), y)
   obj-y  += common/bu63165af/
 else
