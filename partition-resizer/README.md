@@ -43,9 +43,29 @@ devices, and unsafe geometry stop before the first write.
    ```
 
 4. Keep the generated directory. It contains the GPT metadata and every fixed
-   partition that had to move. Reboot back to TWRP, format the donor, then flash
-   a matching system/vendor image. Do not boot Android if the script stopped
-   after a GPT write; use the saved files and the scatter/MTK recovery path.
+   partition that had to move. For an ext4 grow, `-Apply` deliberately stops
+   after the GPT write because the running kernel still has the old partition
+   table. Reboot back to TWRP/recovery and run the finalizer before booting:
+
+   ```powershell
+   .\partition-resizer\resize-partition.ps1 `
+     -Partition system -SizeMiB 3072 -Finalize
+   ```
+
+   The finalizer checks the refreshed partition node and grows ext4 to fill it.
+   Do not boot Android between `-Apply` and `-Finalize`.
+
+5. After every successful geometry change, format the donor in TWRP/recovery
+   (for example, `mke2fs -F -t ext4 -L userdata /dev/block/mmcblk0p34`) and
+   verify that it mounts. The donor's old filesystem/encryption header is no
+   longer valid after its start LBA moves; factory reset cannot repair that.
+   Only then flash a matching system/vendor image and boot Android. If a run is
+   interrupted, inspect GPT and the target block count, format the donor, and
+   do not boot until they agree.
+
+6. Keep the generated directory. It contains the GPT metadata and every fixed
+   partition that had to move. Do not boot Android if the script stopped after
+   a GPT write; use the saved files and the scatter/MTK recovery path.
 
 The default ADB is `..\platform-tools\adb.exe`; pass `-Adb` and `-Serial` when
 needed. The script is deliberately not run against normal Android and does

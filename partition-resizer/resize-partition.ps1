@@ -22,8 +22,9 @@ param(
   [string]$Serial,
   [Parameter(Mandatory=$true)][string]$Partition,
   [Parameter(Mandatory=$true)][ValidateRange(1,1048576)][UInt64]$SizeMiB,
-  [Parameter(Mandatory=$true)][Alias('Donor')][string]$DonorSpec,
+  [Parameter(Mandatory=$false)][Alias('Donor')][string]$DonorSpec,
   [switch]$Apply,
+  [switch]$Finalize,
   [switch]$SkipFilesystemResize,
   [string]$BackupDir = (Join-Path (Get-Location) ("partition-backup-" + (Get-Date -Format 'yyyyMMdd-HHmmss')))
 )
@@ -171,7 +172,22 @@ if((Invoke-AdbText 'if [ -e /dev/block/by-name/super ]; then echo present; elif 
 if((Invoke-AdbText 'cat /proc/mounts') -match ' /(system|vendor|product|data|cache|metadata) '){throw 'an affected Android partition is mounted; unmount it in TWRP'}
 
 $d=Find-DiskAndSector; $layout=Get-Layout $d
-$target=Resolve-Part $layout $Partition; $donor=Resolve-Part $layout $DonorSpec
+$targetByName=Resolve-Part $layout $Partition
+if($Finalize){
+  if($null -eq $targetByName){throw 'finalize target partition was not found'}
+  $finalPath="$($d.Path)p$($targetByName.Number)"; $finalFsLine=Invoke-AdbText "blkid $finalPath 2>/dev/null || true"
+  if($finalFsLine -notmatch 'TYPE="ext4"'){throw 'finalize requires an ext4 target'}
+  $finalBlocks=[UInt64]((PartSize $targetByName)*$d.SectorSize/4096)
+  # TWRP ships an old resize2fs which otherwise refuses to grow a filesystem
+  # whose superblock still advertises the pre-repartition size.  The partition
+  # table was already refreshed by the recovery reboot, so forcing the grow is
+  # safe after the ext4 type/geometry checks above.
+  $finalOut=Invoke-AdbText ('e2fsck -fy ' + $finalPath + ' >/dev/null 2>&1; resize2fs -f ' + $finalPath + '; echo __ARCH_RESIZE_RC:$?; tune2fs -l ' + $finalPath + ' 2>/dev/null | grep "Block count"')
+  $finalOut | Out-Host; if($finalOut -notmatch "Block count:\s+$finalBlocks\b"){throw "finalize did not reach $finalBlocks blocks"}
+  Write-Host "FINALIZED: $Partition filesystem now fills $finalBlocks blocks ($([UInt64]($finalBlocks*4096)) bytes)."; exit 0
+}
+$target=$targetByName; $donor=Resolve-Part $layout $DonorSpec
+if(-not $Finalize -and [string]::IsNullOrWhiteSpace($DonorSpec)){throw 'a donor partition is required unless -Finalize is used'}
 if($null -eq $target -or $null -eq $donor){throw 'target or donor partition was not found'}
 if($target.Number -eq $donor.Number -or $donor.Start -le $target.Start){throw 'donor must be a later partition than target'}
 $forbidden='boot|recovery|lk|lk2|preloader|pgpt|sgpt|protect1|protect2|nvram|nvdata|nvcfg|proinfo|tee1|tee2|otp|flashinfo'
@@ -277,9 +293,9 @@ if($layout.Type -eq 'GPT'){
 Invoke-AdbText "blockdev --rereadpt $($d.Path) 2>/dev/null || true" | Out-Host
 foreach($m in $moves){$file=Join-Path $BackupDir ("p$($m.number)-$($m.name).bin");$bytes=[IO.File]::ReadAllBytes($file);Send-AdbBytes "dd of=$($d.Path)p$($m.number) bs=$($d.SectorSize) 2>/dev/null" $bytes}
 if(-not $SkipFilesystemResize -and $fst -eq 'ext4' -and $delta -gt 0){
-  $expectedBlocks=[UInt64]($newTargetSize*$d.SectorSize/4096)
-  $resizeCheck=Invoke-AdbText ('resize2fs ' + $targetPath + '; echo __ARCH_RESIZE_RC:$?; tune2fs -l ' + $targetPath + ' 2>/dev/null | grep "Block count"')
-  $resizeCheck | Out-Host; if($resizeCheck -notmatch "Block count:\s+$expectedBlocks\b"){throw "filesystem did not grow to $expectedBlocks blocks"}
+  Write-Host 'GPT is updated but the running kernel still has the old partition table.'
+  Write-Host 'Reboot TWRP/recovery, then rerun with -Finalize to grow the ext4 filesystem.'
+  exit 0
 }
 Invoke-AdbText "blockdev --rereadpt $($d.Path) 2>/dev/null || true" | Out-Host
 Write-Host "DONE. GPT/MBR metadata was written and moved partitions restored. Format the donor in TWRP before booting; backup is $BackupDir"
