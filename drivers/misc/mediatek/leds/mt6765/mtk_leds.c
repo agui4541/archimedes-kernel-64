@@ -582,6 +582,17 @@ int mt_led_blink_pmic(enum mt65xx_led_pmic pmic_type, struct nled_setting *led)
 	if (led->nled_mode != NLED_BLINK)
 		return -1;
 
+	/* Refuse periods the PMIC ISINK hardware cannot express. The blink
+	 * period is limited to the 8 discrete entries in pmic_period_array[]
+	 * (max 60 ms); find_time_index_pmic() clamps anything longer to the
+	 * last entry (freqsel=28 -> ~16.7 Hz), which makes a normal
+	 * notification blink strobe visibly. Returning an error lets the LED
+	 * core fall back to led_set_software_blink() at the requested period.
+	 */
+	if ((led->blink_on_time + led->blink_off_time) >
+	    pmic_period_array[PMIC_PERIOD_NUM - 1])
+		return -1;
+
 	LEDS_DEBUG("LED blink on time = %d offtime = %d\n",
 		   led->blink_on_time, led->blink_off_time);
 	time_index =
@@ -1004,9 +1015,8 @@ int mt_mt65xx_blink_set(struct led_classdev *led_cdev,
 				    led_data->delay_off;
 				nled_tmp_setting.blink_on_time =
 				    led_data->delay_on;
-				mt_led_blink_pmic(led_data->cust.data,
-						  &nled_tmp_setting);
-				return 0;
+				return mt_led_blink_pmic(led_data->cust.data,
+							  &nled_tmp_setting);
 			} else if (!got_wake_lock) {
 				__pm_stay_awake(&leds_suspend_lock);
 				got_wake_lock = 1;
