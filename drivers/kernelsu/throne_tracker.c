@@ -62,6 +62,21 @@ static int get_pkg_from_apk_path(char *pkg, const char *path)
 	return 0;
 }
 
+static bool is_manager_package_path(const char *path)
+{
+#ifdef KSU_MANAGER_PACKAGE
+	char pkg[KSU_MAX_PACKAGE_NAME];
+
+	if (get_pkg_from_apk_path(pkg, path) < 0)
+		return false;
+
+	return strncmp(pkg, KSU_MANAGER_PACKAGE,
+		       sizeof(KSU_MANAGER_PACKAGE)) == 0;
+#else
+	return false;
+#endif
+}
+
 static void crown_manager(const char *apk, struct list_head *uid_data)
 {
 	char pkg[KSU_MAX_PACKAGE_NAME];
@@ -195,6 +210,14 @@ FILLDIR_RETURN_TYPE my_actor(struct dir_context *ctx, const char *name,
 					kfree(pos);
 				}
 			} else {
+				if (is_manager_package_path(dirpath)) {
+					/* Do not cache a manager signature miss.
+					 * It may be a transient read/open failure.
+					 */
+					pr_info("Not caching manager APK signature miss: %s\n",
+						dirpath);
+					return FILLDIR_ACTOR_CONTINUE;
+				}
 				struct apk_path_hash *apk_data = kmalloc(sizeof(struct apk_path_hash), GFP_ATOMIC);
 				apk_data->hash = hash;
 				apk_data->exists = true;
