@@ -317,24 +317,35 @@ void track_throne()
 	char chr = 0;
 	loff_t pos = 0;
 	loff_t line_start = 0;
-	char buf[KSU_MAX_PACKAGE_NAME];
+	char buf[KSU_MAX_PACKAGE_NAME + 1];
+	bool parse_error = false;
 	for (;;) {
 		ssize_t count =
 			ksu_kernel_read_compat(fp, &chr, sizeof(chr), &pos);
-		if (count != sizeof(chr))
+		if (count == 0)
 			break;
+		if (count < 0) {
+			pr_err("update_uid: packages.list read err: %zd\n", count);
+			parse_error = true;
+			break;
+		}
+		if (count != sizeof(chr)) {
+			pr_err("update_uid: short character read: %zd\n", count);
+			parse_error = true;
+			break;
+		}
 		if (chr != '\n')
 			continue;
 
-		count = ksu_kernel_read_compat(fp, buf, sizeof(buf),
+		count = ksu_kernel_read_compat(fp, buf, sizeof(buf) - 1,
 					       &line_start);
-
-		struct uid_data *data =
-			kzalloc(sizeof(struct uid_data), GFP_ATOMIC);
-		if (!data) {
-			filp_close(fp, 0);
-			goto out;
+		if (count <= 0 || count >= sizeof(buf)) {
+			pr_err("update_uid: invalid packages.list line read: %zd\n",
+			       count);
+			parse_error = true;
+			break;
 		}
+		buf[count] = '\0';
 
 		char *tmp = buf;
 		const char *delim = " ";
@@ -342,21 +353,47 @@ void track_throne()
 		char *uid = strsep(&tmp, delim);
 		if (!uid || !package) {
 			pr_err("update_uid: package or uid is NULL!\n");
+			parse_error = true;
 			break;
 		}
 
 		u32 res;
 		if (kstrtou32(uid, 10, &res)) {
-			pr_err("update_uid: uid parse err\n");
+			pr_err("update_uid: uid parse err for %s\n", package);
+			parse_error = true;
 			break;
 		}
+		if (!*package || strlen(package) >= KSU_MAX_PACKAGE_NAME) {
+			pr_err("update_uid: invalid package name\n");
+			parse_error = true;
+			break;
+		}
+
+		struct uid_data *data =
+			kzalloc(sizeof(struct uid_data), GFP_ATOMIC);
+		if (!data) {
+			filp_close(fp, 0);
+			goto out;
+		}
 		data->uid = res;
-		strncpy(data->package, package, KSU_MAX_PACKAGE_NAME);
+		strncpy(data->package, package, sizeof(data->package) - 1);
 		list_add_tail(&data->list, &uid_list);
 		// reset line start
 		line_start = pos;
 	}
+	if (line_start != pos) {
+		pr_err("update_uid: incomplete final packages.list line\n");
+		parse_error = true;
+	}
+	if (list_empty(&uid_list)) {
+		pr_err("update_uid: refusing empty packages.list snapshot\n");
+		parse_error = true;
+	}
 	filp_close(fp, 0);
+	if (parse_error) {
+		pr_err("update_uid: refusing incomplete packages.list snapshot\n");
+		goto out;
+	}
 
 	// now update uid list
 	struct uid_data *np;
