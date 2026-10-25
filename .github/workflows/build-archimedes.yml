@@ -26,7 +26,6 @@ jobs:
       # while an explicit input can override it.
       BUILD_VARIANT: ${{ (github.event_name == 'workflow_dispatch' && inputs.variant != 'auto' && inputs.variant) || (github.ref_name == 'kernelsu' && 'kernelsu') || 'pure' }}
       JOBS: 24
-      KBUILD_BUILD_TIMESTAMP: 2026-09-28T00:00:00Z
     steps:
       - name: Checkout
         uses: actions/checkout@v4
