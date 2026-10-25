@@ -246,6 +246,10 @@ int ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 			}
 			return 0;
 		}
+		pr_info_ratelimited("become_manager denied: uid=%u manager_uid=%u valid=%u comm=%s\n",
+				    (unsigned int)current_uid_val,
+				    (unsigned int)manager_uid,
+				    ksu_is_manager_uid_valid(), current->comm);
 		return 0;
 	}
 
