@@ -24,7 +24,6 @@
 #define SYS_NEWFSTATAT_SYMBOL "__arm64_sys_newfstatat"
 #define SYS_FACCESSAT_SYMBOL "__arm64_sys_faccessat"
 #define SYS_EXECVE_SYMBOL "__arm64_sys_execve"
-#define SYS_EXECVEAT_SYMBOL "__arm64_sys_execveat"
 #else
 #define PRCTL_SYMBOL "sys_prctl"
 /* Android's 4.9 arm64 kernel exports the old SyS_* names. */
@@ -32,7 +31,6 @@
 #define SYS_NEWFSTATAT_SYMBOL "SyS_newfstatat"
 #define SYS_FACCESSAT_SYMBOL "SyS_faccessat"
 #define SYS_EXECVE_SYMBOL "SyS_execve"
-#define SYS_EXECVEAT_SYMBOL "SyS_execveat"
 #endif
 
 #elif defined(__x86_64__)
@@ -56,14 +54,12 @@
 #define SYS_NEWFSTATAT_SYMBOL "__x64_sys_newfstatat"
 #define SYS_FACCESSAT_SYMBOL "__x64_sys_faccessat"
 #define SYS_EXECVE_SYMBOL "__x64_sys_execve"
-#define SYS_EXECVEAT_SYMBOL "__x64_sys_execveat"
 #else
 #define PRCTL_SYMBOL "sys_prctl"
 #define SYS_READ_SYMBOL "sys_read"
 #define SYS_NEWFSTATAT_SYMBOL "sys_newfstatat"
 #define SYS_FACCESSAT_SYMBOL "sys_faccessat"
 #define SYS_EXECVE_SYMBOL "sys_execve"
-#define SYS_EXECVEAT_SYMBOL "sys_execveat"
 #endif
 
 #else

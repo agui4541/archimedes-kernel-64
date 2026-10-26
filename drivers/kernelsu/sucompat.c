@@ -270,16 +270,6 @@ static int sys_execve_handler_pre(struct kprobe *p, struct pt_regs *regs)
 					  NULL);
 }
 
-static int sys_execveat_handler_pre(struct kprobe *p, struct pt_regs *regs)
-{
-	struct pt_regs *real_regs = PT_REAL_REGS(regs);
-	int *fd = (int *)&PT_REGS_PARM1(real_regs);
-	const char __user **filename_user =
-		(const char __user **)&PT_REGS_PARM2(real_regs);
-
-	return ksu_handle_execve_sucompat(fd, filename_user, NULL, NULL, NULL);
-}
-
 #if defined(__aarch64__)
 /* Android on this target is a 32-bit userspace on an arm64 kernel. */
 static int compat_sys_execve_handler_pre(struct kprobe *p, struct pt_regs *regs)
@@ -380,10 +370,15 @@ static struct kprobe execve_kp = {
 	.symbol_name = SYS_EXECVE_SYMBOL,
 	.pre_handler = sys_execve_handler_pre,
 };
-static struct kprobe execveat_kp = {
-	.symbol_name = SYS_EXECVEAT_SYMBOL,
-	.pre_handler = sys_execveat_handler_pre,
+static struct kprobe execve_common_kp = {
+	.symbol_name = "do_execveat_common",
+	.pre_handler = execve_handler_pre,
 };
+static struct kprobe execve_common_isra_kp = {
+	.symbol_name = "do_execveat_common.isra.0",
+	.pre_handler = execve_handler_pre,
+};
+static struct kprobe *execve_common_active_kp;
 #else
 static struct kprobe execve_kp = {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
@@ -424,8 +419,17 @@ void ksu_sucompat_init()
 	int ret;
 	ret = register_kprobe(&execve_kp);
 	pr_info("sucompat: execve_kp: %d\n", ret);
-	ret = register_kprobe(&execveat_kp);
-	pr_info("sucompat: execveat_kp: %d\n", ret);
+	ret = register_kprobe(&execve_common_kp);
+	if (!ret) {
+		execve_common_active_kp = &execve_common_kp;
+		pr_info("sucompat: execve common hook: do_execveat_common\n");
+	} else {
+		ret = register_kprobe(&execve_common_isra_kp);
+		if (!ret)
+			execve_common_active_kp = &execve_common_isra_kp;
+		pr_info("sucompat: execve common hook: do_execveat_common.isra.0 (%d)\n",
+			ret);
+	}
 #if defined(__aarch64__)
 	ret = register_kprobe(&compat_execve_kp);
 	pr_info("sucompat: compat_execve_kp: %d\n", ret);
@@ -455,7 +459,8 @@ void ksu_sucompat_exit()
 {
 #ifdef CONFIG_KPROBES
 	unregister_kprobe(&execve_kp);
-	unregister_kprobe(&execveat_kp);
+	if (execve_common_active_kp)
+		unregister_kprobe(execve_common_active_kp);
 #if defined(__aarch64__)
 	unregister_kprobe(&compat_execve_kp);
 	unregister_kprobe(&compat_execveat_kp);
