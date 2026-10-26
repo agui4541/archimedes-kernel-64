@@ -370,6 +370,15 @@ static struct kprobe execve_kp = {
 	.symbol_name = SYS_EXECVE_SYMBOL,
 	.pre_handler = sys_execve_handler_pre,
 };
+static struct kprobe execve_common_kp = {
+	.symbol_name = "do_execveat_common",
+	.pre_handler = execve_handler_pre,
+};
+static struct kprobe execve_common_isra_kp = {
+	.symbol_name = "do_execveat_common.isra.0",
+	.pre_handler = execve_handler_pre,
+};
+static struct kprobe *execve_common_active_kp;
 #else
 static struct kprobe execve_kp = {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
@@ -410,6 +419,17 @@ void ksu_sucompat_init()
 	int ret;
 	ret = register_kprobe(&execve_kp);
 	pr_info("sucompat: execve_kp: %d\n", ret);
+	ret = register_kprobe(&execve_common_kp);
+	if (!ret) {
+		execve_common_active_kp = &execve_common_kp;
+		pr_info("sucompat: execve common hook: do_execveat_common\n");
+	} else {
+		ret = register_kprobe(&execve_common_isra_kp);
+		if (!ret)
+			execve_common_active_kp = &execve_common_isra_kp;
+		pr_info("sucompat: execve common hook: do_execveat_common.isra.0 (%d)\n",
+			ret);
+	}
 #if defined(__aarch64__)
 	ret = register_kprobe(&compat_execve_kp);
 	pr_info("sucompat: compat_execve_kp: %d\n", ret);
@@ -439,6 +459,8 @@ void ksu_sucompat_exit()
 {
 #ifdef CONFIG_KPROBES
 	unregister_kprobe(&execve_kp);
+	if (execve_common_active_kp)
+		unregister_kprobe(execve_common_active_kp);
 #if defined(__aarch64__)
 	unregister_kprobe(&compat_execve_kp);
 	unregister_kprobe(&compat_execveat_kp);

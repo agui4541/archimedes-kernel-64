@@ -62,6 +62,21 @@ static int get_pkg_from_apk_path(char *pkg, const char *path)
 	return 0;
 }
 
+static bool is_manager_package_path(const char *path)
+{
+#ifdef KSU_MANAGER_PACKAGE
+	char pkg[KSU_MAX_PACKAGE_NAME];
+
+	if (get_pkg_from_apk_path(pkg, path) < 0)
+		return false;
+
+	return strncmp(pkg, KSU_MANAGER_PACKAGE,
+		       sizeof(KSU_MANAGER_PACKAGE)) == 0;
+#else
+	return false;
+#endif
+}
+
 static void crown_manager(const char *apk, struct list_head *uid_data)
 {
 	char pkg[KSU_MAX_PACKAGE_NAME];
@@ -195,6 +210,14 @@ FILLDIR_RETURN_TYPE my_actor(struct dir_context *ctx, const char *name,
 					kfree(pos);
 				}
 			} else {
+				if (is_manager_package_path(dirpath)) {
+					/* Do not cache a manager signature miss.
+					 * It may be a transient read/open failure.
+					 */
+					pr_info("Not caching manager APK signature miss: %s\n",
+						dirpath);
+					return FILLDIR_ACTOR_CONTINUE;
+				}
 				struct apk_path_hash *apk_data = kmalloc(sizeof(struct apk_path_hash), GFP_ATOMIC);
 				apk_data->hash = hash;
 				apk_data->exists = true;
@@ -294,24 +317,35 @@ void track_throne()
 	char chr = 0;
 	loff_t pos = 0;
 	loff_t line_start = 0;
-	char buf[KSU_MAX_PACKAGE_NAME];
+	char buf[KSU_MAX_PACKAGE_NAME + 1];
+	bool parse_error = false;
 	for (;;) {
 		ssize_t count =
 			ksu_kernel_read_compat(fp, &chr, sizeof(chr), &pos);
-		if (count != sizeof(chr))
+		if (count == 0)
 			break;
+		if (count < 0) {
+			pr_err("update_uid: packages.list read err: %zd\n", count);
+			parse_error = true;
+			break;
+		}
+		if (count != sizeof(chr)) {
+			pr_err("update_uid: short character read: %zd\n", count);
+			parse_error = true;
+			break;
+		}
 		if (chr != '\n')
 			continue;
 
-		count = ksu_kernel_read_compat(fp, buf, sizeof(buf),
+		count = ksu_kernel_read_compat(fp, buf, sizeof(buf) - 1,
 					       &line_start);
-
-		struct uid_data *data =
-			kzalloc(sizeof(struct uid_data), GFP_ATOMIC);
-		if (!data) {
-			filp_close(fp, 0);
-			goto out;
+		if (count <= 0 || count >= sizeof(buf)) {
+			pr_err("update_uid: invalid packages.list line read: %zd\n",
+			       count);
+			parse_error = true;
+			break;
 		}
+		buf[count] = '\0';
 
 		char *tmp = buf;
 		const char *delim = " ";
@@ -319,21 +353,47 @@ void track_throne()
 		char *uid = strsep(&tmp, delim);
 		if (!uid || !package) {
 			pr_err("update_uid: package or uid is NULL!\n");
+			parse_error = true;
 			break;
 		}
 
 		u32 res;
 		if (kstrtou32(uid, 10, &res)) {
-			pr_err("update_uid: uid parse err\n");
+			pr_err("update_uid: uid parse err for %s\n", package);
+			parse_error = true;
 			break;
 		}
+		if (!*package || strlen(package) >= KSU_MAX_PACKAGE_NAME) {
+			pr_err("update_uid: invalid package name\n");
+			parse_error = true;
+			break;
+		}
+
+		struct uid_data *data =
+			kzalloc(sizeof(struct uid_data), GFP_ATOMIC);
+		if (!data) {
+			filp_close(fp, 0);
+			goto out;
+		}
 		data->uid = res;
-		strncpy(data->package, package, KSU_MAX_PACKAGE_NAME);
+		strncpy(data->package, package, sizeof(data->package) - 1);
 		list_add_tail(&data->list, &uid_list);
 		// reset line start
 		line_start = pos;
 	}
+	if (line_start != pos) {
+		pr_err("update_uid: incomplete final packages.list line\n");
+		parse_error = true;
+	}
+	if (list_empty(&uid_list)) {
+		pr_err("update_uid: refusing empty packages.list snapshot\n");
+		parse_error = true;
+	}
 	filp_close(fp, 0);
+	if (parse_error) {
+		pr_err("update_uid: refusing incomplete packages.list snapshot\n");
+		goto out;
+	}
 
 	// now update uid list
 	struct uid_data *np;
@@ -341,13 +401,15 @@ void track_throne()
 
 	// first, check if manager_uid exist!
 	bool manager_exist = false;
-	list_for_each_entry (np, &uid_list, list) {
-		// if manager is installed in work profile, the uid in packages.list is still equals main profile
-		// don't delete it in this case!
-		int manager_uid = ksu_get_manager_uid() % 100000;
-		if (np->uid == manager_uid) {
-			manager_exist = true;
-			break;
+	if (ksu_is_manager_uid_valid()) {
+		list_for_each_entry (np, &uid_list, list) {
+			// if manager is installed in work profile, the uid in packages.list is still equals main profile
+			// don't delete it in this case!
+			uid_t manager_uid = ksu_get_manager_uid() % 100000;
+			if (np->uid == manager_uid) {
+				manager_exist = true;
+				break;
+			}
 		}
 	}
 
