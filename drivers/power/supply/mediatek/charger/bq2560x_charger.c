@@ -234,7 +234,7 @@ static int bq2560x_enable(struct charger_device *chg_dev, bool enable)
 	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_POWER,
-			BQ2560X_POWER_CHG_ENABLE,
+			BQ2560X_POWER_OTG_CHG_MASK,
 			enable ? BQ2560X_POWER_CHG_ENABLE : 0);
 }
 
@@ -246,7 +246,8 @@ static int bq2560x_is_enabled(struct charger_device *chg_dev, bool *enable)
 
 	ret = bq2560x_read_reg(chip, BQ2560X_REG_POWER, &value);
 	if (!ret)
-		*enable = !!(value & BQ2560X_POWER_CHG_ENABLE);
+		*enable = (value & BQ2560X_POWER_OTG_CHG_MASK) ==
+			BQ2560X_POWER_CHG_ENABLE;
 	return ret;
 }
 
