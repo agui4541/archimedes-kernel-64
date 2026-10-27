@@ -148,7 +148,7 @@ static u8 bq2560x_encode_iterm(u32 ua)
 
 static int bq2560x_set_input_current(struct charger_device *chg_dev, u32 ua)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 	u8 value;
 	u8 mask = BQ2560X_INPUT_IINLIM_MASK | BQ2560X_INPUT_HIZ_MASK;
 	int ret;
@@ -166,7 +166,7 @@ static int bq2560x_set_input_current(struct charger_device *chg_dev, u32 ua)
 
 static int bq2560x_get_input_current(struct charger_device *chg_dev, u32 *ua)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 	u8 value;
 	int ret;
 
@@ -180,7 +180,7 @@ static int bq2560x_get_input_current(struct charger_device *chg_dev, u32 *ua)
 static int bq2560x_set_charging_current(struct charger_device *chg_dev,
 					 u32 ua)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_CHARGE_CURRENT,
 			BQ2560X_CHARGE_ICHG_MASK, bq2560x_encode_ichg(ua));
@@ -189,7 +189,7 @@ static int bq2560x_set_charging_current(struct charger_device *chg_dev,
 static int bq2560x_get_charging_current(struct charger_device *chg_dev,
 					 u32 *ua)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 	u8 value;
 	int ret;
 
@@ -202,7 +202,7 @@ static int bq2560x_get_charging_current(struct charger_device *chg_dev,
 static int bq2560x_set_constant_voltage(struct charger_device *chg_dev,
 					 u32 uv)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_CHARGE_VOLTAGE,
 			BQ2560X_VREG_MASK, bq2560x_encode_vreg(uv) << 3);
@@ -211,7 +211,7 @@ static int bq2560x_set_constant_voltage(struct charger_device *chg_dev,
 static int bq2560x_get_constant_voltage(struct charger_device *chg_dev,
 					 u32 *uv)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 	u8 value;
 	int ret;
 
@@ -223,7 +223,7 @@ static int bq2560x_get_constant_voltage(struct charger_device *chg_dev,
 
 static int bq2560x_set_mivr(struct charger_device *chg_dev, u32 uv)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_BOOST,
 			BQ2560X_BOOST_VINDPM_MASK, bq2560x_encode_vindpm(uv));
@@ -231,7 +231,7 @@ static int bq2560x_set_mivr(struct charger_device *chg_dev, u32 uv)
 
 static int bq2560x_enable(struct charger_device *chg_dev, bool enable)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_POWER,
 			BQ2560X_POWER_OTG_CHG_MASK,
@@ -240,7 +240,7 @@ static int bq2560x_enable(struct charger_device *chg_dev, bool enable)
 
 static int bq2560x_is_enabled(struct charger_device *chg_dev, bool *enable)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 	u8 value;
 	int ret;
 
@@ -263,7 +263,7 @@ static int bq2560x_plug_out(struct charger_device *chg_dev)
 
 static int bq2560x_kick_wdt(struct charger_device *chg_dev)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_POWER,
 			BQ2560X_POWER_WDT_RESET, BQ2560X_POWER_WDT_RESET);
@@ -278,7 +278,7 @@ static int bq2560x_disable_watchdog_timer(struct bq2560x_chip *chip)
 static int bq2560x_enable_safety_timer(struct charger_device *chg_dev,
 					       bool enable)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_TIMER,
 			BQ2560X_TIMER_ENABLE,
@@ -288,7 +288,7 @@ static int bq2560x_enable_safety_timer(struct charger_device *chg_dev,
 static int bq2560x_is_safety_timer_enabled(struct charger_device *chg_dev,
 						bool *enable)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 	u8 value;
 	int ret;
 
@@ -301,7 +301,7 @@ static int bq2560x_is_safety_timer_enabled(struct charger_device *chg_dev,
 static int bq2560x_enable_termination(struct charger_device *chg_dev,
 					      bool enable)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_TIMER,
 			BQ2560X_TIMER_TERM_ENABLE,
@@ -311,7 +311,7 @@ static int bq2560x_enable_termination(struct charger_device *chg_dev,
 static int bq2560x_is_charging_done(struct charger_device *chg_dev,
 					    bool *done)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 	u8 value;
 	int ret;
 
@@ -324,7 +324,7 @@ static int bq2560x_is_charging_done(struct charger_device *chg_dev,
 
 static int bq2560x_set_eoc_current(struct charger_device *chg_dev, u32 ua)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_CHARGE_LIMIT,
 			BQ2560X_LIMIT_ITERM_MASK, bq2560x_encode_iterm(ua));
@@ -333,7 +333,7 @@ static int bq2560x_set_eoc_current(struct charger_device *chg_dev, u32 ua)
 static int bq2560x_set_recharge_voltage(struct charger_device *chg_dev,
 						 u32 uv)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_CHARGE_VOLTAGE,
 			BQ2560X_VRECHG_MASK,
@@ -342,7 +342,7 @@ static int bq2560x_set_recharge_voltage(struct charger_device *chg_dev,
 
 static int bq2560x_get_eoc_current(struct charger_device *chg_dev, u32 *ua)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 	u8 value;
 	int ret;
 
@@ -356,7 +356,7 @@ static int bq2560x_get_eoc_current(struct charger_device *chg_dev, u32 *ua)
 
 static int bq2560x_enable_otg(struct charger_device *chg_dev, bool enable)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_POWER,
 			BQ2560X_POWER_OTG_CHG_MASK,
@@ -366,7 +366,7 @@ static int bq2560x_enable_otg(struct charger_device *chg_dev, bool enable)
 static int bq2560x_set_boost_current_limit(struct charger_device *chg_dev,
 						 u32 ua)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 
 	return bq2560x_update_bits(chip, BQ2560X_REG_CHARGE_CURRENT,
 			BQ2560X_CHARGE_BOOST_LIM,
@@ -410,7 +410,7 @@ static int bq2560x_set_vac_ovp(struct bq2560x_chip *chip, u32 mv)
 
 static int bq2560x_dump_registers(struct charger_device *chg_dev)
 {
-	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+	struct bq2560x_chip *chip = charger_get_data(chg_dev);
 	int i, ret;
 	u8 value;
 
