@@ -229,12 +229,6 @@ static int bq2560x_set_mivr(struct charger_device *chg_dev, u32 uv)
 			BQ2560X_BOOST_VINDPM_MASK, bq2560x_encode_vindpm(uv));
 }
 
-static int bq2560x_set_vdpm_bat_track(struct bq2560x_chip *chip, u8 value)
-{
-	return bq2560x_update_bits(chip, BQ2560X_REG_MISC,
-			BQ2560X_MISC_VDPM_TRACK_MASK, value);
-}
-
 static int bq2560x_enable(struct charger_device *chg_dev, bool enable)
 {
 	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
@@ -335,6 +329,16 @@ static int bq2560x_set_eoc_current(struct charger_device *chg_dev, u32 ua)
 			BQ2560X_LIMIT_ITERM_MASK, bq2560x_encode_iterm(ua));
 }
 
+static int bq2560x_set_recharge_voltage(struct charger_device *chg_dev,
+						 u32 uv)
+{
+	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
+
+	return bq2560x_update_bits(chip, BQ2560X_REG_CHARGE_VOLTAGE,
+			BQ2560X_VRECHG_MASK,
+			uv >= 200000 ? BQ2560X_VRECHG_MASK : 0);
+}
+
 static int bq2560x_get_eoc_current(struct charger_device *chg_dev, u32 *ua)
 {
 	struct bq2560x_chip *chip = charger_dev_get_drvdata(chg_dev);
@@ -367,12 +371,6 @@ static int bq2560x_set_boost_current_limit(struct charger_device *chg_dev,
 			BQ2560X_CHARGE_BOOST_LIM,
 			ua == BQ2560X_BOOST_1P2A_UA ?
 			BQ2560X_CHARGE_BOOST_LIM : 0);
-}
-
-static int bq2560x_mask_dpm_interrupts(struct bq2560x_chip *chip)
-{
-	return bq2560x_update_bits(chip, BQ2560X_REG_STATUS2,
-			BQ2560X_STATUS2_INT_MASK, BQ2560X_STATUS2_INT_MASK);
 }
 
 static int bq2560x_set_boost_voltage(struct bq2560x_chip *chip, u32 mv)
@@ -522,9 +520,6 @@ static int bq2560x_init_device(struct bq2560x_chip *chip)
 	ret = bq2560x_disable_watchdog_timer(chip);
 	if (ret < 0)
 		return ret;
-	ret = bq2560x_set_vdpm_bat_track(chip, 1);
-	if (ret < 0)
-		return ret;
 	ret = bq2560x_update_bits(chip, BQ2560X_REG_INPUT,
 			BQ2560X_INPUT_STAT_MASK, desc->stat_pin_ctrl << 5);
 	if (ret < 0)
@@ -548,7 +543,33 @@ static int bq2560x_init_device(struct bq2560x_chip *chip)
 			desc->termination_ma * 1000);
 	if (ret < 0)
 		return ret;
-	ret = bq2560x_mask_dpm_interrupts(chip);
+
+	/* Match the stock BQ2560x hardware-init sequence. */
+	ret = bq2560x_set_mivr(chip->chg_dev, 4500000);
+	if (ret < 0)
+		return ret;
+	ret = bq2560x_set_eoc_current(chip->chg_dev, 150000);
+	if (ret < 0)
+		return ret;
+	ret = bq2560x_set_constant_voltage(chip->chg_dev, 4350000);
+	if (ret < 0)
+		return ret;
+	ret = bq2560x_set_input_current(chip->chg_dev, 500000);
+	if (ret < 0)
+		return ret;
+	ret = bq2560x_set_charging_current(chip->chg_dev, 500000);
+	if (ret < 0)
+		return ret;
+	ret = bq2560x_set_recharge_voltage(chip->chg_dev, 100000);
+	if (ret < 0)
+		return ret;
+	ret = bq2560x_enable_safety_timer(chip->chg_dev, true);
+	if (ret < 0)
+		return ret;
+	ret = bq2560x_enable_termination(chip->chg_dev, true);
+	if (ret < 0)
+		return ret;
+	ret = bq2560x_enable(chip->chg_dev, true);
 	if (ret < 0)
 		return ret;
 
