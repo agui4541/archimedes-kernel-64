@@ -1,0 +1,78 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+
+#ifndef __BQ2560X_CHARGER_H
+#define __BQ2560X_CHARGER_H
+
+#include <linux/bitops.h>
+
+#define BQ2560X_REG_INPUT              0x00
+#define BQ2560X_REG_POWER              0x01
+#define BQ2560X_REG_CHARGE_CURRENT     0x02
+#define BQ2560X_REG_CHARGE_LIMIT       0x03
+#define BQ2560X_REG_CHARGE_VOLTAGE     0x04
+#define BQ2560X_REG_TIMER              0x05
+#define BQ2560X_REG_BOOST              0x06
+#define BQ2560X_REG_MISC               0x07
+#define BQ2560X_REG_STATUS             0x08
+#define BQ2560X_REG_FAULT              0x09
+#define BQ2560X_REG_STATUS2            0x0a
+#define BQ2560X_REG_DEVICE             0x0b
+
+#define BQ2560X_INPUT_HIZ_MASK         BIT(7)
+#define BQ2560X_INPUT_STAT_MASK        GENMASK(6, 5)
+#define BQ2560X_INPUT_IINLIM_MASK      GENMASK(4, 0)
+
+#define BQ2560X_POWER_WDT_RESET        BIT(6)
+#define BQ2560X_POWER_OTG_CHG_MASK     GENMASK(5, 4)
+#define BQ2560X_POWER_CHG_ENABLE       BIT(4)
+
+#define BQ2560X_CHARGE_ICHG_MASK       GENMASK(5, 0)
+#define BQ2560X_CHARGE_BOOST_LIM       BIT(7)
+
+#define BQ2560X_LIMIT_IPRECHG_MASK     GENMASK(7, 4)
+#define BQ2560X_LIMIT_ITERM_MASK       GENMASK(3, 0)
+
+#define BQ2560X_VREG_MASK              GENMASK(7, 3)
+#define BQ2560X_VRECHG_MASK            BIT(0)
+
+#define BQ2560X_TIMER_TERM_ENABLE      BIT(7)
+#define BQ2560X_TIMER_WDT_MASK         GENMASK(5, 4)
+#define BQ2560X_TIMER_ENABLE           BIT(3)
+
+#define BQ2560X_BOOST_OVP_MASK         GENMASK(7, 6)
+#define BQ2560X_BOOST_VOLTAGE_MASK     GENMASK(5, 4)
+#define BQ2560X_BOOST_VINDPM_MASK      GENMASK(3, 0)
+
+#define BQ2560X_MISC_BATFET_MASK       BIT(5)
+#define BQ2560X_MISC_BATFET_DLY        BIT(3)
+#define BQ2560X_MISC_VDPM_TRACK_MASK   GENMASK(1, 0)
+
+#define BQ2560X_STATUS_CHARGE_MASK     GENMASK(4, 3)
+#define BQ2560X_STATUS_CHARGE_DONE     3
+#define BQ2560X_STATUS2_INT_MASK       GENMASK(1, 0)
+
+#define BQ2560X_DEVICE_PN_MASK         GENMASK(6, 3)
+#define BQ2560X_DEVICE_REV_MASK        GENMASK(1, 0)
+#define BQ25601_DEVICE_PN              2
+
+#define BQ2560X_IINLIM_MIN_UA          100000
+#define BQ2560X_IINLIM_MAX_UA          3200000
+#define BQ2560X_IINLIM_STEP_UA         100000
+
+#define BQ2560X_ICHG_MAX_UA            3000000
+#define BQ2560X_ICHG_STEP_UA           60000
+#define BQ2560X_BOOST_1P2A_UA          1200000
+
+#define BQ2560X_VREG_MIN_UV            3856000
+#define BQ2560X_VREG_MAX_UV            4624000
+#define BQ2560X_VREG_STEP_UV           32000
+
+#define BQ2560X_VINDPM_MIN_UV          3900000
+#define BQ2560X_VINDPM_MAX_UV          5400000
+#define BQ2560X_VINDPM_STEP_UV         100000
+
+#define BQ2560X_ITERM_MIN_UA           60000
+#define BQ2560X_ITERM_MAX_UA           960000
+#define BQ2560X_ITERM_STEP_UA          60000
+
+#endif

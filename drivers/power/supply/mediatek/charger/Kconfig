@@ -89,6 +89,14 @@ config CHARGER_RT9465
 	  application.
 	  It depends on config MTK_CHARGER.
 
+config CHARGER_BQ2560X
+	bool "Charger Driver for TI BQ2560x Charger IC"
+	default n
+	depends on MTK_CHARGER
+	help
+	  Say yes to enable the TI BQ2560x charger used by Archimedes.
+	  The driver registers the charger as primary_chg by default.
+
 config MTK_CHARGER_UNLIMITED
 	bool "MediaTek Charger Unlimited"
 	default n
