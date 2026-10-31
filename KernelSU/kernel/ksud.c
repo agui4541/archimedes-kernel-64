@@ -32,36 +32,22 @@ static const char KERNEL_SU_RC[] =
 
 	"on post-fs-data\n"
 	"    start logd\n"
-	// We should wait for the post-fs-data finish
-	"    copy " KSUD_PATH " " KSUD_EXEC_PATH "\n"
-	"    chown root root " KSUD_EXEC_PATH "\n"
-	"    chmod 0755 " KSUD_EXEC_PATH "\n"
-	"    restorecon " KSUD_EXEC_PATH "\n"
-	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " post-fs-data\n"
+	// Execute the real userspace daemon in the SELinux domain it expects.
+	// Do not stage it under /cache: SAR/GSI devices may mount cache noexec,
+	// and the staging copy also loses the /data/adb label that ksud relies on.
+	"    exec u:r:su:s0 root -- " KSUD_PATH " post-fs-data\n"
 	"\n"
 
 	"on nonencrypted\n"
-	"    copy " KSUD_PATH " " KSUD_EXEC_PATH "\n"
-	"    chown root root " KSUD_EXEC_PATH "\n"
-	"    chmod 0755 " KSUD_EXEC_PATH "\n"
-	"    restorecon " KSUD_EXEC_PATH "\n"
-	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " services\n"
+	"    exec u:r:su:s0 root -- " KSUD_PATH " services\n"
 	"\n"
 
 	"on property:vold.decrypt=trigger_restart_framework\n"
-	"    copy " KSUD_PATH " " KSUD_EXEC_PATH "\n"
-	"    chown root root " KSUD_EXEC_PATH "\n"
-	"    chmod 0755 " KSUD_EXEC_PATH "\n"
-	"    restorecon " KSUD_EXEC_PATH "\n"
-	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " services\n"
+	"    exec u:r:su:s0 root -- " KSUD_PATH " services\n"
 	"\n"
 
 	"on property:sys.boot_completed=1\n"
-	"    copy " KSUD_PATH " " KSUD_EXEC_PATH "\n"
-	"    chown root root " KSUD_EXEC_PATH "\n"
-	"    chmod 0755 " KSUD_EXEC_PATH "\n"
-	"    restorecon " KSUD_EXEC_PATH "\n"
-	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " boot-completed\n"
+	"    exec u:r:su:s0 root -- " KSUD_PATH " boot-completed\n"
 	"\n"
 
 	"\n";
@@ -352,11 +338,6 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 		return 0;
 	}
 
-	const char *short_name = file->f_path.dentry->d_name.name;
-	if (strcmp(short_name, "atrace.rc")) {
-		// we are only interest `atrace.rc` file name file
-		return 0;
-	}
 	char path[256];
 	char *dpath = d_path(&file->f_path, path, sizeof(path));
 
@@ -364,7 +345,21 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 		return 0;
 	}
 
-	if (strcmp(dpath, "/system/etc/init/atrace.rc")) {
+	/*
+	 * GSI/SAR images do not consistently ship atrace.rc, while the target
+	 * image has /system/etc/init/su.rc and init parses it early.  Accept both
+	 * known rc files and the common system-as-root/vendor spellings.  The
+	 * one-shot guard below prevents duplicate injection if init reads both.
+	 */
+	const char *short_name = strrchr(dpath, '/');
+	if (!short_name || (strcmp(short_name + 1, "atrace.rc") &&
+				   strcmp(short_name + 1, "su.rc"))) {
+		return 0;
+	}
+	if (strncmp(dpath, "/system/etc/init/", 17) &&
+	    strncmp(dpath, "/system/system/etc/init/", 24) &&
+	    strncmp(dpath, "/vendor/etc/init/", 17) &&
+	    strncmp(dpath, "/odm/etc/init/", 15)) {
 		return 0;
 	}
 
@@ -375,10 +370,8 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 		stop_vfs_read_hook();
 		return 0;
 	}
-	rc_inserted = true;
-
-	// now we can sure that the init process is reading
-	// `/system/etc/init/atrace.rc`
+	// Defer the one-shot mark until the injection succeeds.  A short first
+	// read must not permanently disable the trigger.
 	buf = *buf_ptr;
 	count = *count_ptr;
 
@@ -397,11 +390,13 @@ int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
 		pr_err("copy ksud.rc failed: %zu\n", ret);
 		return 0;
 	}
+	rc_inserted = true;
 
 	/* The target uses 32-bit init; apply dynamic SELinux rules before init
 	 * executes the injected ksud actions. */
 	apply_kernelsu_rules();
-	pr_info("applied KernelSU SELinux rules from atrace.rc hook; defer post-fs-data\n");
+	pr_info("applied KernelSU SELinux rules from %s hook; defer post-fs-data\n",
+		 dpath);
 
 	// we've succeed to insert ksud.rc, now we need to proxy the read and modify the result!
 	// But, we can not modify the file_operations directly, because it's in read-only memory.

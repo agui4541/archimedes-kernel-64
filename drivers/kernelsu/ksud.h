@@ -4,7 +4,7 @@
 #include <linux/types.h>
 
 #define KSUD_PATH "/data/adb/ksud"
-#define KSUD_EXEC_PATH "/cache/ksud"
+#define KSUD_EXEC_PATH KSUD_PATH
 
 void on_post_fs_data(void);
 
