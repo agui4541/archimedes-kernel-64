@@ -323,7 +323,7 @@ impl LoopDevice {
         #[allow(unused_unsafe)]
         self.device
             .metadata()
-            .map(|m| unsafe { libc::major(m.rdev() as u32) })
+            .map(|m| unsafe { libc::major(m.rdev() as libc::dev_t) })
             .map(|m| m as u32)
     }
 
@@ -338,7 +338,7 @@ impl LoopDevice {
         #[allow(unused_unsafe)]
         self.device
             .metadata()
-            .map(|m| unsafe { libc::minor(m.rdev() as u32) })
+            .map(|m| unsafe { libc::minor(m.rdev() as libc::dev_t) })
             .map(|m| m as u32)
     }
 

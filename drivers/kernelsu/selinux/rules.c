@@ -135,6 +135,10 @@ void apply_kernelsu_rules()
 	// For mounting loop devices, mirrors, tmpfs
 	ksu_allow(db, "kernel", ALL, "file", "read");
 	ksu_allow(db, "kernel", ALL, "file", "write");
+	// ksud mounts module images through loop devices while running in init.
+	ksu_allow(db, "init", "loop_control_device", "chr_file", ALL);
+	ksu_allow(db, "init", "loop_device", "blk_file", ALL);
+	ksu_allow(db, "init", "system_file", "file", "mounton");
 
 	// Allow all binder transactions
 	ksu_allow(db, ALL, KERNEL_SU_DOMAIN, "binder", ALL);

@@ -32,22 +32,45 @@ static const char KERNEL_SU_RC[] =
 
 	"on post-fs-data\n"
 	"    start logd\n"
-	// Execute the real userspace daemon in the SELinux domain it expects.
-	// Do not stage it under /cache: SAR/GSI devices may mount cache noexec,
-	// and the staging copy also loses the /data/adb label that ksud relies on.
-	"    exec u:r:su:s0 root -- " KSUD_PATH " post-fs-data\n"
+	// Keep the compatibility copy used by the su shim and execute from the
+	// restored /cache copy in the init domain, matching KernelSU's original
+	// boot trigger semantics.
+	"    copy " KSUD_PATH " " KSUD_EXEC_PATH "\n"
+	"    chown root root " KSUD_EXEC_PATH "\n"
+	"    chmod 0755 " KSUD_EXEC_PATH "\n"
+	"    restorecon " KSUD_EXEC_PATH "\n"
+	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " post-fs-data\n"
 	"\n"
 
 	"on nonencrypted\n"
-	"    exec u:r:su:s0 root -- " KSUD_PATH " services\n"
+	"    copy " KSUD_PATH " " KSUD_EXEC_PATH "\n"
+	"    chown root root " KSUD_EXEC_PATH "\n"
+	"    chmod 0755 " KSUD_EXEC_PATH "\n"
+	"    restorecon " KSUD_EXEC_PATH "\n"
+	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " services\n"
 	"\n"
 
 	"on property:vold.decrypt=trigger_restart_framework\n"
-	"    exec u:r:su:s0 root -- " KSUD_PATH " services\n"
+	"    copy " KSUD_PATH " " KSUD_EXEC_PATH "\n"
+	"    chown root root " KSUD_EXEC_PATH "\n"
+	"    chmod 0755 " KSUD_EXEC_PATH "\n"
+	"    restorecon " KSUD_EXEC_PATH "\n"
+	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " services\n"
 	"\n"
 
 	"on property:sys.boot_completed=1\n"
-	"    exec u:r:su:s0 root -- " KSUD_PATH " boot-completed\n"
+	"    copy " KSUD_PATH " " KSUD_EXEC_PATH "\n"
+	"    chown root root " KSUD_EXEC_PATH "\n"
+	"    chmod 0755 " KSUD_EXEC_PATH "\n"
+	"    restorecon " KSUD_EXEC_PATH "\n"
+	// Some GSI init trees emit post-fs-data before /data is fully prepared.
+	// Re-copy ksud before retrying so the late action never races /cache.
+	"    copy " KSUD_PATH " " KSUD_EXEC_PATH "\n"
+	"    chown root root " KSUD_EXEC_PATH "\n"
+	"    chmod 0755 " KSUD_EXEC_PATH "\n"
+	"    restorecon " KSUD_EXEC_PATH "\n"
+	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " post-fs-data\n"
+	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " boot-completed\n"
 	"\n"
 
 	"\n";
@@ -603,20 +626,18 @@ static struct kprobe execve_kp = {
 };
 #endif
 
-/* Hook the common VFS entry point. Android 9's 32-bit init reaches this
- * through the compat syscall table, while the syscall symbol itself varies
- * between vendor 4.9 trees (SyS_read/sys_read). */
-#if 0
-static struct kprobe vfs_read_kp = {
-	.symbol_name = SYS_READ_SYMBOL,
-	.pre_handler = sys_read_handler_pre,
-};
-#else
+/* Hook both levels. Some MTK 4.9 trees expose vfs_read but the 32-bit init
+ * reaches it through a compat syscall path that never hits that kprobe.
+ * sys_read gives us the fd and works for that path; vfs_read remains a
+ * fallback for vendor trees that do not expose the syscall symbol. */
 static struct kprobe vfs_read_kp = {
 	.symbol_name = "vfs_read",
 	.pre_handler = vfs_read_handler_pre,
 };
-#endif
+static struct kprobe sys_read_kp = {
+	.symbol_name = "sys_read",
+	.pre_handler = sys_read_handler_pre,
+};
 
 static struct kprobe input_event_kp = {
 	.symbol_name = "input_event",
@@ -626,6 +647,7 @@ static struct kprobe input_event_kp = {
 static void do_stop_vfs_read_hook(struct work_struct *work)
 {
 	unregister_kprobe(&vfs_read_kp);
+	unregister_kprobe(&sys_read_kp);
 }
 
 static void do_stop_execve_hook(struct work_struct *work)
@@ -693,6 +715,8 @@ void ksu_ksud_init()
 
 	ret = register_kprobe(&vfs_read_kp);
 	pr_info("ksud: vfs_read_kp: %d\n", ret);
+	ret = register_kprobe(&sys_read_kp);
+	pr_info("ksud: sys_read_kp: %d\n", ret);
 
 	ret = register_kprobe(&input_event_kp);
 	pr_info("ksud: input_event_kp: %d\n", ret);
@@ -710,8 +734,9 @@ void ksu_ksud_exit()
 #if defined(__aarch64__) && defined(CONFIG_COMPAT)
         unregister_kprobe(&compat_ksud_execve_kp);
 #endif
-	// this should be done before unregister vfs_read_kp
-	// unregister_kprobe(&vfs_read_kp);
+	// this should be done before unregistering the read hooks
+	unregister_kprobe(&vfs_read_kp);
+	unregister_kprobe(&sys_read_kp);
 	unregister_kprobe(&input_event_kp);
 #endif
 }

@@ -33,7 +33,52 @@ fn mount_partition(partition_name: &str, lowerdir: &Vec<String>) -> Result<()> {
     mount::mount_overlay(&partition, lowerdir, workdir, upperdir)
 }
 
+fn bind_module_tree(source: &Path, target: &Path) -> Result<()> {
+    let entries = std::fs::read_dir(source)
+        .with_context(|| format!("read module tree {}", source.display()))?;
+    for entry in entries.flatten() {
+        let src = entry.path();
+        let dst = target.join(entry.file_name());
+        let metadata = match std::fs::symlink_metadata(&src) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if metadata.is_dir() {
+            if dst.is_dir() {
+                bind_module_tree(&src, &dst)?;
+            }
+        } else if metadata.is_file() && dst.exists() {
+            if let Err(e) = mount::bind_mount(&src, &dst) {
+                warn!("bind module file {} -> {} failed: {:#}", src.display(), dst.display(), e);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn bind_module_files(module_dir: &str) -> Result<()> {
+    let root = Path::new(module_dir);
+    let entries = std::fs::read_dir(root)
+        .with_context(|| format!("read module dir {}", root.display()))?;
+    for entry in entries.flatten() {
+        let module = entry.path();
+        if !module.is_dir() || module.join(defs::DISABLE_FILE_NAME).exists() {
+            continue;
+        }
+        let module_system = module.join("system");
+        if module_system.is_dir() {
+            bind_module_tree(&module_system, Path::new("/system"))?;
+        }
+    }
+    Ok(())
+}
+
 pub fn mount_modules_systemlessly(module_dir: &str) -> Result<()> {
+    let kernel_release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    if kernel_release.starts_with("4.9.") {
+        bind_module_files(module_dir)?;
+        return Ok(());
+    }
     // construct overlay mount params
     let dir = std::fs::read_dir(module_dir);
     let Ok(dir) = dir else {
@@ -100,6 +145,16 @@ pub fn on_post_data_fs() -> Result<()> {
     ksucalls::report_post_fs_data();
 
     utils::umask(0);
+    let kernel_release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let bootguard_file = Path::new(defs::WORKING_DIR).join(defs::BOOTGUARD_FILE_NAME);
+    let bootguard_enabled = kernel_release.starts_with("4.9.");
+    if bootguard_enabled && !utils::is_safe_mode() {
+        if let Err(e) = std::fs::File::create(&bootguard_file) {
+            warn!("create bootguard marker failed: {e:#}");
+        } else {
+            info!("bootguard marker armed");
+        }
+    }
 
     #[cfg(unix)]
     let _ = catch_bootlog("logcat", vec!["logcat"]);
@@ -143,8 +198,9 @@ pub fn on_post_data_fs() -> Result<()> {
             // this make sure that if the update failed, we will fallback to the old image
             // if we boot succeed, we will rename the modules_update.img to modules.img #on_boot_complete
             target_update_img = &module_update_img;
-            // And we should delete the flag immediately
-            std::fs::remove_file(module_update_flag)?;
+            // Keep the flag until the image is mounted successfully.  The
+            // first post-fs-data event can run before /data is ready; if the
+            // mount fails, the late retry must still treat this as an update.
         } else {
             // if modules_update.img exists, but the flag not exist, we should delete it
             std::fs::remove_file(module_update_img)?;
@@ -160,6 +216,10 @@ pub fn on_post_data_fs() -> Result<()> {
     info!("mount module image: {target_update_img} to {module_dir}");
     mount::AutoMountExt4::try_new(target_update_img, module_dir, false)
         .with_context(|| "mount module image failed".to_string())?;
+
+    if target_update_img == &module_update_img {
+        std::fs::remove_file(module_update_flag)?;
+    }
 
     // tell kernel that we've mount the module, so that it can do some optimization
     ksucalls::report_module_mounted();
@@ -249,6 +309,11 @@ pub fn on_services() -> Result<()> {
 pub fn on_boot_completed() -> Result<()> {
     ksucalls::report_boot_complete();
     info!("on_boot_completed triggered!");
+    let bootguard_file = Path::new(defs::WORKING_DIR).join(defs::BOOTGUARD_FILE_NAME);
+    if bootguard_file.exists() {
+        std::fs::remove_file(&bootguard_file).with_context(|| "remove bootguard marker")?;
+        info!("bootguard marker cleared");
+    }
     let module_update_img = Path::new(defs::MODULE_UPDATE_IMG);
     let module_img = Path::new(defs::MODULE_IMG);
     if module_update_img.exists() {
