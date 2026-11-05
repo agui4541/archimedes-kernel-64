@@ -233,6 +233,25 @@ pub fn bind_mount(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
+fn make_mount_slave(path: impl AsRef<Path>) -> Result<()> {
+    let target = CString::new(path.as_ref().as_os_str().as_encoded_bytes())?;
+    let empty = CString::new("")?;
+    let ret = unsafe {
+        libc::mount(
+            empty.as_ptr(),
+            target.as_ptr(),
+            empty.as_ptr(),
+            (libc::MS_SLAVE | libc::MS_REC) as libc::c_ulong,
+            std::ptr::null(),
+        )
+    };
+    if ret != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn move_mount_path(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
     let source = CString::new(from.as_ref().as_os_str().as_encoded_bytes())?;
     let target = CString::new(to.as_ref().as_os_str().as_encoded_bytes())?;
@@ -388,6 +407,11 @@ pub fn mount_overlay(
     mount_seq.dedup();
     let child_mirrors = snapshot_child_mounts(root, &mount_seq)?;
     mount_debug(format!("child mirrors root={} count={}", root, child_mirrors.len()));
+    if let Err(error) = make_mount_slave(root) {
+        mount_debug(format!("make target slave failed root={} error={error:#}", root));
+    } else {
+        mount_debug(format!("target converted to slave root={}", root));
+    }
     // The stock root must not be used as its own lowerdir on old 4.9 kernels.
     // Keep a recursive bind in the data namespace and overlay onto the original.
     let root_mirror = Path::new("/data/adb/ksu/overlay-mirrors").join(
