@@ -139,6 +139,17 @@ void apply_kernelsu_rules()
 	ksu_allow(db, "init", "loop_control_device", "chr_file", ALL);
 	ksu_allow(db, "init", "loop_device", "blk_file", ALL);
 	ksu_allow(db, "init", "system_file", "file", "mounton");
+	ksu_allow(db, "init", "vendor_file", "file", "mounton");
+	ksu_allow(db, "init", "mnt_vendor_file", "file", "mounton");
+	ksu_allow(db, "init", "rootfs", "file", "mounton");
+	ksu_allow(db, "init", "adb_data_file", "file", "mounton");
+	// OverlayFS mounts the partition roots from init. Android 9 labels
+	// vendor/odm as vendor_file and uses system_file for product/system.
+	ksu_allow(db, "init", "system_file", "dir", "mounton");
+	ksu_allow(db, "init", "vendor_file", "dir", "mounton");
+	ksu_allow(db, "init", "mnt_vendor_file", "dir", "mounton");
+	ksu_allow(db, "init", "rootfs", "dir", "mounton");
+	ksu_allow(db, "init", "adb_data_file", "dir", "mounton");
 
 	// Allow all binder transactions
 	ksu_allow(db, ALL, KERNEL_SU_DOMAIN, "binder", ALL);

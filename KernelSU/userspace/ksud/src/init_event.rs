@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use log::{info, warn};
 use std::{collections::HashMap, path::Path};
 
@@ -56,88 +56,133 @@ fn bind_module_tree(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn bind_module_files(module_dir: &str) -> Result<()> {
-    let root = Path::new(module_dir);
-    let entries = std::fs::read_dir(root)
-        .with_context(|| format!("read module dir {}", root.display()))?;
+fn bind_module_partition(module_dir: &str, partition: &str) -> Result<()> {
+    let entries = std::fs::read_dir(module_dir)
+        .with_context(|| format!("read module dir {}", module_dir))?;
+    let target = Path::new("/").join(partition);
     for entry in entries.flatten() {
         let module = entry.path();
-        if !module.is_dir() || module.join(defs::DISABLE_FILE_NAME).exists() {
+        if !module.is_dir()
+            || module.join(defs::DISABLE_FILE_NAME).exists()
+            || module.join(defs::SKIP_MOUNT_FILE_NAME).exists()
+        {
             continue;
         }
-        let module_system = module.join("system");
-        if module_system.is_dir() {
-            bind_module_tree(&module_system, Path::new("/system"))?;
+        let source = module.join(partition);
+        if source.is_dir() && target.is_dir() {
+            bind_module_tree(&source, &target)?;
         }
     }
     Ok(())
 }
 
+
+fn arm_overlay_health_watcher() {
+    // Keep the early post-fs-data overlay timing required by modules, but do
+    // not depend on init's property action to clear the rescue markers. Some
+    // GSI init trees miss that action after the framework is already up.
+    let script = "while [ \"$(getprop sys.boot_completed)\" != \"1\" ]; do sleep 1; done; rm -f /data/adb/ksu/bootguard.pending /data/adb/ksu/overlay-watchdog.active; touch /data/adb/ksu/overlay-watchdog.done; /data/adb/ksud boot-completed";
+    if let Err(e) = std::process::Command::new(assets::BUSYBOX_PATH)
+        .args(["sh", "-c", script])
+        .spawn()
+    {
+        warn!("start overlay health watcher failed: {e:#}");
+    } else {
+        info!("overlay health watcher armed");
+    }
+}
+
+fn arm_overlay_watchdog() {
+    // Keep the rescue path entirely on /data. If an overlay mount makes the
+    // system namespace unusable, /system/bin/sh and /system/bin/reboot may no
+    // longer be executable. The embedded busybox remains available from the
+    // KSU data directory and can still return to recovery.
+    let active = Path::new(defs::WORKING_DIR).join("overlay-watchdog.active");
+    let done = Path::new(defs::WORKING_DIR).join("overlay-watchdog.done");
+    let _ = std::fs::remove_file(&done);
+    if let Err(e) = std::fs::File::create(&active) {
+        warn!("arm overlay watchdog marker failed: {e:#}");
+        return;
+    }
+    let script = format!(
+        "sleep 90; if [ -e '{}' ] && [ ! -e '{}' ]; then '{}' reboot recovery; fi",
+        active.display(),
+        done.display(),
+        assets::BUSYBOX_PATH
+    );
+    if let Err(e) = std::process::Command::new(assets::BUSYBOX_PATH)
+        .args(["sh", "-c", &script])
+        .spawn()
+    {
+        warn!("start overlay watchdog failed: {e:#}");
+    } else {
+        info!("overlay watchdog armed");
+    }
+}
 pub fn mount_modules_systemlessly(module_dir: &str) -> Result<()> {
-    let kernel_release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
-    if kernel_release.starts_with("4.9.") {
-        bind_module_files(module_dir)?;
+    // OverlayFS is opt-in on this legacy Android 9 device. A stale or partially
+    // installed module must never create a root overlay during early boot.
+    let overlay_enabled = Path::new("/data/adb/ksu/overlay.enable").exists();
+    if !overlay_enabled {
+        info!("overlayfs not enabled; using bind fallback");
+        for partition in ["system", "vendor", "product", "system_ext", "odm", "oem"] {
+            let _ = bind_module_partition(module_dir, partition);
+        }
         return Ok(());
     }
-    // construct overlay mount params
-    let dir = std::fs::read_dir(module_dir);
-    let Ok(dir) = dir else {
-        bail!("open {} failed", defs::MODULE_DIR);
-    };
-
+    let dir = std::fs::read_dir(module_dir)
+        .with_context(|| format!("open {} failed", defs::MODULE_DIR))?;
+    let partitions = ["vendor", "product", "system_ext", "odm", "oem"];
     let mut system_lowerdir: Vec<String> = Vec::new();
-
-    let partition = vec!["vendor", "product", "system_ext", "odm", "oem"];
     let mut partition_lowerdir: HashMap<String, Vec<String>> = HashMap::new();
-    for ele in &partition {
-        partition_lowerdir.insert((*ele).to_string(), Vec::new());
+    for partition in partitions {
+        partition_lowerdir.insert(partition.to_string(), Vec::new());
     }
 
     for entry in dir.flatten() {
         let module = entry.path();
-        if !module.is_dir() {
+        if !module.is_dir()
+            || module.join(defs::DISABLE_FILE_NAME).exists()
+            || module.join(defs::SKIP_MOUNT_FILE_NAME).exists()
+        {
             continue;
         }
-        let disabled = module.join(defs::DISABLE_FILE_NAME).exists();
-        if disabled {
-            info!("module: {} is disabled, ignore!", module.display());
-            continue;
-        }
-        let skip_mount = module.join(defs::SKIP_MOUNT_FILE_NAME).exists();
-        if skip_mount {
-            info!("module: {} skip_mount exist, skip!", module.display());
-            continue;
-        }
-
-        let module_system = Path::new(&module).join("system");
+        let module_system = module.join("system");
         if module_system.is_dir() {
-            system_lowerdir.push(format!("{}", module_system.display()));
+            system_lowerdir.push(module_system.display().to_string());
         }
-
-        for part in &partition {
-            // if /partition is a mountpoint, we would move it to $MODPATH/$partition when install
-            // otherwise it must be a symlink and we don't need to overlay!
-            let part_path = Path::new(&module).join(part);
+        for partition in partitions {
+            let part_path = module.join(partition);
             if part_path.is_dir() {
-                if let Some(v) = partition_lowerdir.get_mut(*part) {
-                    v.push(format!("{}", part_path.display()));
-                }
+                partition_lowerdir
+                    .get_mut(partition)
+                    .expect("partition initialized")
+                    .push(part_path.display().to_string());
             }
         }
     }
 
-    // mount /system first
-    if let Err(e) = mount_partition("system", &system_lowerdir) {
-        warn!("mount system failed: {:#}", e);
-    }
-
-    // mount other partitions
-    for (k, v) in partition_lowerdir {
-        if let Err(e) = mount_partition(&k, &v) {
-            warn!("mount {k} failed: {:#}", e);
+    // OverlayFS is the primary path: it preserves additions and directory
+    // merges. The per-file bind path is only a compatibility fallback for
+    // a partition whose mount is rejected by the kernel or SELinux policy.
+    if !system_lowerdir.is_empty() {
+        if let Err(e) = mount_partition("system", &system_lowerdir) {
+            warn!("overlay mount system failed: {:#}; using bind fallback", e);
+            bind_module_partition(module_dir, "system")?;
         }
     }
-
+    for partition in partitions {
+        let lowerdir = partition_lowerdir
+            .get(partition)
+            .expect("partition initialized");
+        if lowerdir.is_empty() {
+            continue;
+        }
+        if let Err(e) = mount_partition(partition, lowerdir) {
+            warn!("overlay mount {partition} failed: {:#}; using bind fallback", e);
+            bind_module_partition(module_dir, partition)?;
+        }
+    }
     Ok(())
 }
 
@@ -145,10 +190,30 @@ pub fn on_post_data_fs() -> Result<()> {
     ksucalls::report_post_fs_data();
 
     utils::umask(0);
-    let kernel_release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let post_fs_done = Path::new(defs::WORKING_DIR).join("post-fs-data.done");
+    let boot_completed = utils::getprop("sys.boot_completed").as_deref() == Some("1");
+    if boot_completed && post_fs_done.exists() {
+        info!("post-fs-data already completed for this boot");
+        return Ok(());
+    }
+    if !boot_completed {
+        let _ = std::fs::remove_file(&post_fs_done);
+    }
+    let safe_mode = crate::utils::is_safe_mode();
+    if Path::new("/data/adb/ksu/overlay.enable").exists() {
+        // Switch before starting log capture or module scripts. The vendor
+        // 4.9 kernel rejects setns after the post-fs-data process has spawned
+        // helper children.
+        if let Err(error) = utils::switch_mnt_ns(1) {
+            warn!("switch to init mount namespace failed, continuing: {error:#}");
+        }
+    }
     let bootguard_file = Path::new(defs::WORKING_DIR).join(defs::BOOTGUARD_FILE_NAME);
-    let bootguard_enabled = kernel_release.starts_with("4.9.");
-    if bootguard_enabled && !utils::is_safe_mode() {
+    let bootguard_enabled = utils::getprop("ro.product.vendor.device")
+        .as_deref()
+        .map(|value| value == "Archimedes")
+        .unwrap_or(false);
+    if bootguard_enabled && !safe_mode {
         if let Err(e) = std::fs::File::create(&bootguard_file) {
             warn!("create bootguard marker failed: {e:#}");
         } else {
@@ -166,7 +231,6 @@ pub fn on_post_data_fs() -> Result<()> {
         return Ok(());
     }
 
-    let safe_mode = crate::utils::is_safe_mode();
 
     if safe_mode {
         // we should still mount modules.img to `/data/adb/modules` in safe mode
@@ -266,9 +330,17 @@ pub fn on_post_data_fs() -> Result<()> {
         warn!("load system.prop failed: {}", e);
     }
 
-    // mount module systemlessly by overlay
+    // Keep the standard early mount point: modules may need their files before
+    // zygote starts. The separate health watcher only fixes marker cleanup.
+    if Path::new("/data/adb/ksu/overlay.enable").exists() {
+        arm_overlay_watchdog();
+        arm_overlay_health_watcher();
+    }
     if let Err(e) = mount_modules_systemlessly(module_dir) {
         warn!("do systemless mount failed: {}", e);
+    }
+    if let Err(e) = std::fs::File::create(&post_fs_done) {
+        warn!("create post-fs-data completion marker failed: {e:#}");
     }
 
     run_stage("post-mount", true);
@@ -311,8 +383,18 @@ pub fn on_boot_completed() -> Result<()> {
     info!("on_boot_completed triggered!");
     let bootguard_file = Path::new(defs::WORKING_DIR).join(defs::BOOTGUARD_FILE_NAME);
     if bootguard_file.exists() {
-        std::fs::remove_file(&bootguard_file).with_context(|| "remove bootguard marker")?;
-        info!("bootguard marker cleared");
+        // This callback is emitted after sys.boot_completed=1.  Clear the
+        // marker in-process: GSI SELinux policy rejects executing both
+        // /system/bin/sh and data-labeled helper binaries from init.
+        if let Err(e) = std::fs::remove_file(&bootguard_file) {
+            warn!("remove bootguard marker failed: {e:#}");
+        } else {
+            info!("bootguard marker cleared");
+        }
+        let watchdog_active = Path::new(defs::WORKING_DIR).join("overlay-watchdog.active");
+        let watchdog_done = Path::new(defs::WORKING_DIR).join("overlay-watchdog.done");
+        let _ = std::fs::remove_file(watchdog_active);
+        let _ = std::fs::File::create(watchdog_done);
     }
     let module_update_img = Path::new(defs::MODULE_UPDATE_IMG);
     let module_img = Path::new(defs::MODULE_IMG);

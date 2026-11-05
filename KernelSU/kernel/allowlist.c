@@ -73,8 +73,14 @@ static void init_default_profiles()
 	default_root_profile.namespaces = 0;
 	strcpy(default_root_profile.selinux_domain, KSU_DEFAULT_SELINUX_DOMAIN);
 
-	// This means that we will umount modules by default!
+	// Legacy 4.9 kernels without path_umount cannot hide module mounts.
+	// Keep the profile consistent with the kernel capability instead of
+	// retrying an unsupported umount for every zygote child.
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0) || defined(KSU_UMOUNT)
 	default_non_root_profile.umount_modules = true;
+#else
+	default_non_root_profile.umount_modules = false;
+#endif
 }
 
 struct perm_data {
@@ -294,6 +300,11 @@ bool __ksu_is_allow_uid(uid_t uid)
 
 bool ksu_uid_should_umount(uid_t uid)
 {
+#ifndef KSU_UMOUNT
+	// This legacy kernel has no path_umount implementation. Returning false
+	// avoids repeated -ENOSYS calls for every zygote child.
+	return false;
+#else
 	struct app_profile profile = { .current_uid = uid };
 	if (likely(ksu_is_manager_uid_valid()) && unlikely(ksu_get_manager_uid() == uid)) {
 		// we should not umount on manager!
@@ -315,6 +326,7 @@ bool ksu_uid_should_umount(uid_t uid)
 			return profile.nrp_config.profile.umount_modules;
 		}
 	}
+#endif
 }
 
 struct root_profile *ksu_get_root_profile(uid_t uid)

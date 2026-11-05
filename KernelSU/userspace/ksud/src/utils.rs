@@ -141,9 +141,22 @@ pub fn switch_mnt_ns(pid: i32) -> Result<()> {
         fs::{open, Mode, OFlags},
     };
     let path = format!("/proc/{pid}/ns/mnt");
+    // setns() can return EBUSY when the caller is already in the requested
+    // namespace. This happens for init-triggered ksud actions on this GSI.
+    let current_ns = std::fs::read_link("/proc/self/ns/mnt")?;
+    let target_ns = std::fs::read_link(&path)?;
+    if current_ns == target_ns {
+        return Ok(());
+    }
     let fd = open(path, OFlags::RDONLY, Mode::from_raw_mode(0))?;
     let current_dir = std::env::current_dir();
-    move_into_link_name_space(fd.as_fd(), Some(LinkNameSpaceType::Mount))?;
+    if let Err(error) = move_into_link_name_space(fd.as_fd(), Some(LinkNameSpaceType::Mount)) {
+        // Some 4.9 vendor kernels report EBUSY even when the namespace switch
+        // has already landed. Verify the namespace before propagating it.
+        if std::fs::read_link("/proc/self/ns/mnt")? != target_ns {
+            return Err(error.into());
+        }
+    }
     if let std::result::Result::Ok(current_dir) = current_dir {
         let _ = std::env::set_current_dir(current_dir);
     }
