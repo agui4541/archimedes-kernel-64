@@ -77,26 +77,7 @@ fn bind_module_partition(module_dir: &str, partition: &str) -> Result<()> {
 }
 
 
-fn arm_overlay_health_watcher() {
-    // Keep the early post-fs-data overlay timing required by modules, but do
-    // not depend on init's property action to clear the rescue markers. Some
-    // GSI init trees miss that action after the framework is already up.
-    let script = "while [ \"$(getprop sys.boot_completed)\" != \"1\" ]; do sleep 1; done; rm -f /data/adb/ksu/bootguard.pending /data/adb/ksu/overlay-watchdog.active; touch /data/adb/ksu/overlay-watchdog.done; /data/adb/ksud boot-completed";
-    if let Err(e) = std::process::Command::new(assets::BUSYBOX_PATH)
-        .args(["sh", "-c", script])
-        .spawn()
-    {
-        warn!("start overlay health watcher failed: {e:#}");
-    } else {
-        info!("overlay health watcher armed");
-    }
-}
-
 fn arm_overlay_watchdog() {
-    // Keep the rescue path entirely on /data. If an overlay mount makes the
-    // system namespace unusable, /system/bin/sh and /system/bin/reboot may no
-    // longer be executable. The embedded busybox remains available from the
-    // KSU data directory and can still return to recovery.
     let active = Path::new(defs::WORKING_DIR).join("overlay-watchdog.active");
     let done = Path::new(defs::WORKING_DIR).join("overlay-watchdog.done");
     let _ = std::fs::remove_file(&done);
@@ -104,20 +85,41 @@ fn arm_overlay_watchdog() {
         warn!("arm overlay watchdog marker failed: {e:#}");
         return;
     }
-    let script = format!(
-        "sleep 90; if [ -e '{}' ] && [ ! -e '{}' ]; then '{}' reboot recovery; fi",
-        active.display(),
-        done.display(),
-        assets::BUSYBOX_PATH
-    );
-    if let Err(e) = std::process::Command::new(assets::BUSYBOX_PATH)
-        .args(["sh", "-c", &script])
+    let executable = std::env::current_exe().unwrap_or_else(|_| Path::new("/cache/ksud").to_path_buf());
+    if let Err(e) = std::process::Command::new(executable)
+        .arg("overlay-watchdog")
         .spawn()
     {
         warn!("start overlay watchdog failed: {e:#}");
     } else {
         info!("overlay watchdog armed");
     }
+}
+
+pub fn overlay_watchdog() -> Result<()> {
+    std::thread::sleep(std::time::Duration::from_secs(90));
+    let active = Path::new(defs::WORKING_DIR).join("overlay-watchdog.active");
+    let done = Path::new(defs::WORKING_DIR).join("overlay-watchdog.done");
+    if active.exists() && !done.exists() {
+        warn!("overlay watchdog timeout; rebooting recovery");
+        let reason = b"recovery\0";
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_reboot,
+                libc::LINUX_REBOOT_MAGIC1,
+                libc::LINUX_REBOOT_MAGIC2,
+                libc::LINUX_REBOOT_CMD_RESTART2,
+                reason.as_ptr(),
+            )
+        };
+        if result != 0 {
+            warn!("direct recovery reboot failed: {}", std::io::Error::last_os_error());
+            let _ = std::process::Command::new("/system/bin/reboot")
+                .arg("recovery")
+                .spawn();
+        }
+    }
+    Ok(())
 }
 pub fn mount_modules_systemlessly(module_dir: &str) -> Result<()> {
     // OverlayFS is opt-in on this legacy Android 9 device. A stale or partially
@@ -333,8 +335,9 @@ pub fn on_post_data_fs() -> Result<()> {
     // Keep the standard early mount point: modules may need their files before
     // zygote starts. The separate health watcher only fixes marker cleanup.
     if Path::new("/data/adb/ksu/overlay.enable").exists() {
+        // The in-process boot-complete callback clears the marker; only the
+        // rescue watchdog is needed during the vulnerable early window.
         arm_overlay_watchdog();
-        arm_overlay_health_watcher();
     }
     if let Err(e) = mount_modules_systemlessly(module_dir) {
         warn!("do systemless mount failed: {}", e);

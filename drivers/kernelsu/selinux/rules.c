@@ -150,6 +150,10 @@ void apply_kernelsu_rules()
 	ksu_allow(db, "init", "mnt_vendor_file", "dir", "mounton");
 	ksu_allow(db, "init", "rootfs", "dir", "mounton");
 	ksu_allow(db, "init", "adb_data_file", "dir", "mounton");
+	// Android 9 creates VNDK and RIL child mounts on tmpfs; init must
+	// be able to reattach their private mirrors after the root overlay.
+	ksu_allow(db, "init", "tmpfs", "file", "mounton");
+	ksu_allow(db, "init", "tmpfs", "dir", "mounton");
 
 	// Allow all binder transactions
 	ksu_allow(db, ALL, KERNEL_SU_DOMAIN, "binder", ALL);

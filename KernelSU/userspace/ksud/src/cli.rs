@@ -34,6 +34,10 @@ enum Commands {
     /// Trigger `boot-complete` event
     BootCompleted,
 
+    /// Internal overlay rescue watchdog
+    #[command(hide = true)]
+    OverlayWatchdog,
+
     /// Install KernelSU userspace component to system
     Install {
         #[arg(long, default_value = None)]
@@ -294,6 +298,7 @@ pub fn run() -> Result<()> {
     let result = match cli.command {
         Commands::PostFsData => init_event::on_post_data_fs(),
         Commands::BootCompleted => init_event::on_boot_completed(),
+        Commands::OverlayWatchdog => init_event::overlay_watchdog(),
 
         Commands::Module { command } => {
             #[cfg(any(target_os = "linux", target_os = "android"))]

@@ -233,6 +233,26 @@ pub fn bind_mount(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
+fn move_mount_path(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
+    let source = CString::new(from.as_ref().as_os_str().as_encoded_bytes())?;
+    let target = CString::new(to.as_ref().as_os_str().as_encoded_bytes())?;
+    let empty = CString::new("")?;
+    let ret = unsafe {
+        libc::mount(
+            source.as_ptr(),
+            target.as_ptr(),
+            empty.as_ptr(),
+            libc::MS_MOVE as libc::c_ulong,
+            std::ptr::null(),
+        )
+    };
+    if ret != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn make_mount_private(path: impl AsRef<Path>) -> Result<()> {
     // /system is a shared mount on this Android 9 tree. A bind clone used as
     // an overlay lowerdir must not receive the overlay mount propagated back
@@ -399,12 +419,17 @@ pub fn mount_overlay(
             let _ = umount_dir(root);
             return Err(error);
         }
-        if let Err(e) = bind_mount(mirror, mount_point) {
-            // A compatibility child mount can be denied by legacy SELinux or
-            // by a read-only lower file. Keep the root overlay alive; losing
-            // the whole overlay makes every other module change disappear.
-            mount_debug(format!("child reattach skipped path={} error={e:#}", mount_point));
-            continue;
+        if let Err(move_error) = move_mount_path(mirror, mount_point) {
+            if let Err(bind_error) = bind_mount(mirror, mount_point) {
+                // A compatibility child mount can be denied by legacy SELinux or
+                // by a read-only lower file. Keep the root overlay alive; losing
+                // the whole overlay makes every other module change disappear.
+                mount_debug(format!("child reattach skipped path={} move={move_error:#} bind={bind_error:#}", mount_point));
+                continue;
+            }
+            mount_debug(format!("child reattached by bind path={} move={move_error:#}", mount_point));
+        } else {
+            mount_debug(format!("child reattached by move path={}", mount_point));
         }
         reattached.push(mount_point.clone());
     }
