@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use log::{info, warn};
-use std::{collections::HashMap, path::Path};
+use std::{collections::{HashMap, HashSet}, path::{Path, PathBuf}};
 
 use crate::module::prune_modules;
 use crate::{
@@ -56,6 +56,29 @@ fn mount_partition(partition_name: &str, lowerdir: &Vec<String>) -> Result<()> {
     mount::mount_overlay(&partition, lowerdir, workdir, upperdir)
 }
 
+fn has_overlay_ancestor(path: &Path) -> bool {
+    let wanted = path.to_string_lossy().trim_end_matches('/').to_string();
+    let Ok(contents) = std::fs::read_to_string("/proc/self/mountinfo") else {
+        return false;
+    };
+    contents.lines().any(|line| {
+        let Some(mountpoint) = line.split_whitespace().nth(4) else {
+            return false;
+        };
+        let filesystem = line.split(" - ").nth(1).unwrap_or_default();
+        if !filesystem.starts_with("overlay ") {
+            return false;
+        }
+        let mountpoint = mountpoint
+            .replace("\\040", " ")
+            .replace("\\011", "\t")
+            .replace("\\134", "\\")
+            .trim_end_matches('/')
+            .to_string();
+        wanted == mountpoint || wanted.starts_with(&(mountpoint + "/"))
+    })
+}
+
 fn bind_module_tree(source: &Path, target: &Path) -> Result<()> {
     let entries = std::fs::read_dir(source)
         .with_context(|| format!("read module tree {}", source.display()))?;
@@ -66,6 +89,13 @@ fn bind_module_tree(source: &Path, target: &Path) -> Result<()> {
             Ok(v) => v,
             Err(_) => continue,
         };
+        // A successful directory overlay already exposes additions and keeps
+        // the system_file/vendor_file superblock context. Binding the same
+        // child again would replace it with the module image's unlabeled
+        // source inode and recreate SELinux denials.
+        if has_overlay_ancestor(&dst) {
+            continue;
+        }
         if metadata.is_dir() {
             if dst.is_dir() {
                 bind_module_tree(&src, &dst)?;
@@ -104,6 +134,137 @@ fn bind_module_partition(module_dir: &str, partition: &str) -> Result<()> {
 }
 
 
+fn mountpoint_has_descendant(path: &Path) -> bool {
+    let wanted = path.to_string_lossy().trim_end_matches('/').to_string();
+    let prefix = format!("{wanted}/");
+    std::fs::read_to_string("/proc/self/mountinfo")
+        .map(|contents| {
+            contents.lines().any(|line| {
+                let Some(mountpoint) = line.split_whitespace().nth(4) else {
+                    return false;
+                };
+                let decoded = mountpoint
+                    .replace("\\040", " ")
+                    .replace("\\011", "\t")
+                    .replace("\\134", "\\");
+                decoded == wanted || decoded.starts_with(&prefix)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn collect_module_overlay_targets(
+    source: &Path,
+    partition_root: &Path,
+    relative: &Path,
+    targets: &mut HashSet<PathBuf>,
+) {
+    let Ok(entries) = std::fs::read_dir(source) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.is_dir() {
+            let next = relative.join(entry.file_name());
+            collect_module_overlay_targets(&path, partition_root, &next, targets);
+            continue;
+        }
+
+        // Find the nearest existing stock directory for this module file.
+        // This lets an overlay expose a new module subdirectory without
+        // replacing /system itself.
+        let mut candidate = relative.to_path_buf();
+        loop {
+            if candidate.as_os_str().is_empty() {
+                break;
+            }
+            let target = partition_root.join(&candidate);
+            if target.is_dir() {
+                targets.insert(target);
+                break;
+            }
+            if !candidate.pop() {
+                break;
+            }
+        }
+    }
+}
+
+fn mount_module_partition_overlay_dirs(module_dir: &str, partition: &str) -> Result<()> {
+    let partition_root = Path::new("/").join(partition);
+    if !partition_root.is_dir() {
+        return Ok(());
+    }
+
+    let mut targets = HashSet::new();
+    let entries = std::fs::read_dir(module_dir)
+        .with_context(|| format!("read module dir {}", module_dir))?;
+    for entry in entries.flatten() {
+        let module = entry.path();
+        if module.file_name().and_then(|name| name.to_str()) == Some(".rw")
+            || !module.is_dir()
+            || module.join(defs::DISABLE_FILE_NAME).exists()
+            || module.join(defs::SKIP_MOUNT_FILE_NAME).exists()
+        {
+            continue;
+        }
+        let source = module.join(partition);
+        if source.is_dir() {
+            collect_module_overlay_targets(&source, &partition_root, Path::new(""), &mut targets);
+        }
+    }
+
+    // Deepest targets first. Once a child overlay is installed, a parent with
+    // a mounted descendant is skipped; this avoids nesting over GSI child
+    // mounts such as /system/etc/permissions/*.
+    let mut targets: Vec<PathBuf> = targets.into_iter().collect();
+    targets.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    for target in targets {
+        if target == partition_root || mountpoint_has_descendant(&target) {
+            warn!("skip overlay target with mounted child: {}", target.display());
+            continue;
+        }
+        let relative = match target.strip_prefix(&partition_root) {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+        let mut lower_dirs = Vec::new();
+        let entries = std::fs::read_dir(module_dir)
+            .with_context(|| format!("read module dir {}", module_dir))?;
+        for entry in entries.flatten() {
+            let module = entry.path();
+            if module.file_name().and_then(|name| name.to_str()) == Some(".rw")
+                || !module.is_dir()
+                || module.join(defs::DISABLE_FILE_NAME).exists()
+                || module.join(defs::SKIP_MOUNT_FILE_NAME).exists()
+            {
+                continue;
+            }
+            let source = module.join(partition).join(relative);
+            if source.is_dir() {
+                lower_dirs.push(source.display().to_string());
+            }
+        }
+        if lower_dirs.is_empty() {
+            continue;
+        }
+        let Some(stock) = target.to_str() else {
+            continue;
+        };
+        match mount::mount_overlayfs(&lower_dirs, stock, None, None, &target) {
+            Ok(()) => info!("directory overlay installed on {}", target.display()),
+            Err(error) => warn!(
+                "directory overlay failed on {}: {error:#}; bind fallback will cover existing files",
+                target.display()
+            ),
+        }
+    }
+    Ok(())
+}
+
 fn enter_overlay_mount_context() {
     let current = std::fs::read_to_string("/proc/self/attr/current")
         .unwrap_or_default()
@@ -129,6 +290,11 @@ pub fn mount_modules_systemlessly(module_dir: &str) -> Result<()> {
         .unwrap_or(false);
     let force_overlay = Path::new("/data/adb/ksu/overlay.force").exists();
     let gsi_overlay_opt_in = Path::new("/data/adb/ksu/overlay.gsi").exists();
+    let late_overlay = Path::new("/data/adb/ksu/overlay.late").exists();
+    // A late overlay is enabled only from on_boot_completed. A stale
+    // handoff marker must never make the early mount path replace /system.
+    let late_overlay_active = Path::new("/data/adb/ksu/overlay.late.active").exists()
+        && utils::getprop("sys.boot_completed").as_deref() == Some("1");
     let is_phh_gsi = utils::getprop("ro.product.device")
         .as_deref()
         .map(|v| v.starts_with("phhgsi") || v.contains("phh"))
@@ -139,11 +305,14 @@ pub fn mount_modules_systemlessly(module_dir: &str) -> Result<()> {
     // explicitly creates overlay.gsi after a clean baseline is verified.
     let overlay_enabled = overlay_requested
         && (!system_root_image || force_overlay)
-        && (!is_phh_gsi || gsi_overlay_opt_in);
+        && (!is_phh_gsi || gsi_overlay_opt_in)
+        && (!late_overlay || late_overlay_active);
     if overlay_requested && is_phh_gsi && !gsi_overlay_opt_in {
         warn!("phh GSI detected; using bind mounts (create overlay.gsi to opt in)");
     } else if overlay_requested && system_root_image && !force_overlay {
         warn!("system-as-root detected; using legacy bind mounts (create overlay.force to opt in)");
+    } else if overlay_requested && late_overlay && !late_overlay_active {
+        warn!("late overlay requested; keep early boot on bind mounts");
     }
     if !overlay_enabled {
         info!("overlayfs not enabled; using bind fallback");
@@ -152,6 +321,24 @@ pub fn mount_modules_systemlessly(module_dir: &str) -> Result<()> {
         }
         return Ok(());
     }
+    // The phh/GSI mount graph contains shared child mounts below /system.
+    // Replacing the root hides or invalidates /system/bin/sh and causes the
+    // exact early shell failure seen in the root-overlay experiment. Use
+    // directory overlays only where no child mount is underneath, then keep
+    // per-file binds for the remaining paths.
+    if is_phh_gsi {
+        info!("phh GSI: using safe directory overlays plus bind fallback");
+        for partition in ["system", "vendor", "product", "system_ext", "odm", "oem"] {
+            if let Err(error) = mount_module_partition_overlay_dirs(module_dir, partition) {
+                warn!("directory overlay scan failed for {partition}: {error:#}");
+            }
+            if let Err(error) = bind_module_partition(module_dir, partition) {
+                warn!("bind fallback failed for {partition}: {error:#}");
+            }
+        }
+        return Ok(());
+    }
+
     let dir = std::fs::read_dir(module_dir)
         .with_context(|| format!("open {} failed", defs::MODULE_DIR))?;
     let partitions = ["vendor", "product", "system_ext", "odm", "oem"];
@@ -253,6 +440,9 @@ fn mount_module_image_early() -> Result<bool> {
     }
     std::fs::create_dir_all(module_dir)
         .with_context(|| format!("create module directory {module_dir}"))?;
+    if let Err(error) = restorecon::lsetfilecon(module_img, restorecon::ADB_CON) {
+        warn!("set modules image context failed: {error:#}");
+    }
     info!("early mount module image: {} to {}", module_img.display(), module_dir);
     mount::AutoMountExt4::try_new(defs::MODULE_IMG, module_dir, false)
         .with_context(|| "early mount module image failed")?;
@@ -370,10 +560,17 @@ pub fn on_post_data_fs() -> Result<()> {
         let _ = std::fs::remove_file(&pre_mount_done);
     }
     let bootguard_file = Path::new(defs::WORKING_DIR).join(defs::BOOTGUARD_FILE_NAME);
-    let bootguard_enabled = utils::getprop("ro.product.vendor.device")
+    // The GSI path has no dependable boot-completed callback, so a
+    // persistent bootguard marker would survive into the next boot and put
+    // ksud in safe mode forever. Keep bootguard for the stock product only.
+    let bootguard_enabled = !utils::getprop("ro.product.device")
         .as_deref()
-        .map(|value| value == "Archimedes")
-        .unwrap_or(false);
+        .map(|value| value.starts_with("phhgsi") || value.contains("phh"))
+        .unwrap_or(false)
+        && utils::getprop("ro.product.vendor.device")
+            .as_deref()
+            .map(|value| value == "Archimedes")
+            .unwrap_or(false);
     if bootguard_enabled && !safe_mode {
         if let Err(e) = std::fs::File::create(&bootguard_file) {
             warn!("create bootguard marker failed: {e:#}");
@@ -433,6 +630,9 @@ pub fn on_post_data_fs() -> Result<()> {
             return Ok(());
         }
 
+        if let Err(error) = restorecon::lsetfilecon(target_update_img, restorecon::ADB_CON) {
+            warn!("set module image context failed: {error:#}");
+        }
         info!("mount module image: {target_update_img} to {module_dir}");
         mount::AutoMountExt4::try_new(target_update_img, module_dir, false)
             .with_context(|| "mount module image failed".to_string())?;
@@ -586,14 +786,32 @@ pub fn on_boot_completed() -> Result<()> {
     // phh/GSI late mounts can replace /system after post-fs-data. Re-apply
     // the requested overlay after boot is complete, but only if the module
     // image is still mounted and /system is no longer an overlay.
-    if Path::new("/data/adb/ksu/overlay.enable").exists()
+    let overlay_enable = Path::new("/data/adb/ksu/overlay.enable");
+    let overlay_late = Path::new("/data/adb/ksu/overlay.late");
+    let overlay_late_active = Path::new("/data/adb/ksu/overlay.late.active");
+    if overlay_enable.exists()
         && is_mountpoint(defs::MODULE_DIR)
         && !is_overlay_mountpoint("/system")
     {
+        // On phh/GSI, /system has shared child mounts which are still being
+        // assembled during post-fs-data. Keep the proven bind path until
+        // boot-completed, then perform one overlay attempt in init's mount
+        // namespace. The handoff marker is removed immediately so a crash
+        // cannot make the next boot use the early overlay path.
+        let late = overlay_late.exists();
+        if late {
+            if let Err(error) = std::fs::File::create(overlay_late_active) {
+                warn!("create late overlay handoff failed: {error:#}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
         if let Err(error) = mount_modules_systemlessly(defs::MODULE_DIR) {
             warn!("boot-completed overlay reapply failed: {error:#}");
         } else {
             info!("boot-completed overlay reapply completed");
+        }
+        if late {
+            let _ = std::fs::remove_file(overlay_late_active);
         }
     }
     let _ = std::fs::write(

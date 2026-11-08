@@ -53,6 +53,13 @@ fn exec_install_script(module_file: &str) -> Result<()> {
             ),
         )
         .env("KSU", "true")
+        // The legacy installer guesses BOOTMODE by scanning `ps`. On this
+        // Android 9 phh GSI the su namespace does not expose zygote, so the
+        // guess is false even though module install is running in Android.
+        // Force the Android path so files land in modules_update and survive
+        // the next post-fs-data transaction instead of targeting the mounted
+        // read-only modules view.
+        .env("BOOTMODE", if cfg!(target_os = "android") { "true" } else { "false" })
         .env("KSU_KERNEL_VER_CODE", ksucalls::get_version().to_string())
         .env("KSU_VER", defs::VERSION_NAME)
         .env("KSU_VER_CODE", defs::VERSION_CODE)

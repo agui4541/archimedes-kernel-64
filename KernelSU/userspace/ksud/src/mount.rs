@@ -64,6 +64,34 @@ fn mount_debug(message: impl AsRef<str>) {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn mountpoint_in_mountinfo(target: &Path, mountinfo: &str) -> bool {
+    let wanted = target.to_string_lossy().trim_end_matches('/').to_string();
+    mountinfo.lines().any(|line| {
+        line.split_whitespace()
+            .nth(4)
+            .map(|mountpoint| mountpoint.trim_end_matches('/'))
+            == Some(wanted.as_str())
+    })
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn mountpoint_is_present(target: &Path) -> bool {
+    let self_mounted = std::fs::read_to_string("/proc/self/mountinfo")
+        .map(|contents| mountpoint_in_mountinfo(target, &contents))
+        .unwrap_or(false);
+    if self_mounted {
+        return true;
+    }
+
+    // ksud may be launched from a transient init action namespace while the
+    // Android mount helper operates in PID 1's namespace.  Check init's
+    // mountinfo before deciding that the helper failed.
+    std::fs::read_to_string("/proc/1/mountinfo")
+        .map(|contents| mountpoint_in_mountinfo(target, &contents))
+        .unwrap_or(false)
+}
+
 fn capture_kernel_dmesg(tag: &str) {
     let path = format!("/cache/ksu-dmesg-{tag}.log");
     if let std::result::Result::Ok(mut file) = File::create(&path) {
@@ -87,12 +115,55 @@ fn capture_kernel_dmesg(tag: &str) {
 }
 
 pub fn mount_ext4(source: impl AsRef<Path>, target: impl AsRef<Path>) -> Result<()> {
+    #[cfg(target_os = "android")]
+    {
+        // The Android 9 toybox mount applet does not accept an image file as
+        // a source on this build (it falls through to /etc/fstab). Attach the
+        // image explicitly with losetup, then mount the resulting block node.
+        // This keeps loop setup in the platform tools while ksud still owns
+        // the transaction and works from the init-triggered namespace.
+        let loop_output = std::process::Command::new("/system/bin/losetup")
+            .args(["-f", "-s"])
+            .arg(source.as_ref())
+            .output()
+            .with_context(|| format!("Failed to exec losetup for {}", source.as_ref().display()))?;
+        let loop_stderr = String::from_utf8_lossy(&loop_output.stderr);
+        let loop_device = String::from_utf8_lossy(&loop_output.stdout).trim().to_string();
+        if loop_output.status.success() && !loop_device.is_empty() {
+            let mount_output = std::process::Command::new("/system/bin/mount")
+                .args(["-t", "ext4"])
+                .arg(&loop_device)
+                .arg(target.as_ref())
+                .output()
+                .with_context(|| format!("Failed to exec mount for {}", loop_device))?;
+            let mount_stderr = String::from_utf8_lossy(&mount_output.stderr);
+            if mount_output.status.success() || mountpoint_is_present(target.as_ref()) {
+                return Ok(());
+            }
+            let _ = std::process::Command::new("/system/bin/losetup")
+                .args(["-d", &loop_device])
+                .status();
+            log::warn!(
+                "Android block mount failed for {} -> {}: {}",
+                loop_device,
+                target.as_ref().display(),
+                mount_stderr.trim()
+            );
+        } else {
+            log::warn!(
+                "Android losetup failed for {}: {}",
+                source.as_ref().display(),
+                loop_stderr.trim()
+            );
+        }
+    }
+
     let new_loopback = loopdev::LoopControl::open()?
         .next_free()
         .with_context(|| "Failed to alloc loop")?;
     new_loopback
         .with()
-        .attach(source)
+        .attach(source.as_ref())
         .with_context(|| "Failed to attach loop")?;
     let lo = new_loopback.path().ok_or(anyhow!("no loop"))?;
     if let Result::Ok(fs) = fsopen("ext4", FsOpenFlags::FSOPEN_CLOEXEC) {
@@ -121,6 +192,25 @@ pub fn umount_dir(src: impl AsRef<Path>) -> Result<()> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
+fn overlay_context_for(dest: &Path) -> Option<&'static str> {
+    let path = dest.to_string_lossy();
+    if path == "/system" || path.starts_with("/system/") {
+        Some("u:object_r:system_file:s0")
+    } else if path == "/vendor" || path.starts_with("/vendor/") {
+        Some("u:object_r:vendor_file:s0")
+    } else if path == "/product" || path.starts_with("/product/") {
+        Some("u:object_r:product_file:s0")
+    } else if path == "/system_ext" || path.starts_with("/system_ext/") {
+        Some("u:object_r:system_ext_file:s0")
+    } else if path == "/odm" || path.starts_with("/odm/") {
+        Some("u:object_r:odm_file:s0")
+    } else if path == "/oem" || path.starts_with("/oem/") {
+        Some("u:object_r:oemfs_file:s0")
+    } else {
+        None
+    }
+}
+
 pub fn mount_overlayfs(
     lower_dirs: &[String],
     lowest: &str,
@@ -158,6 +248,9 @@ pub fn mount_overlayfs(
             fsconfig_set_string(fs, "upperdir", upperdir)?;
             fsconfig_set_string(fs, "workdir", workdir)?;
         }
+        if let Some(context) = overlay_context_for(dest.as_ref()) {
+            fsconfig_set_string(fs, "context", context)?;
+        }
         fsconfig_set_string(fs, "source", KSU_OVERLAY_SOURCE)?;
         fsconfig_create(fs)?;
         let mount = fsmount(fs, FsMountFlags::FSMOUNT_CLOEXEC, MountAttrFlags::empty())?;
@@ -174,6 +267,9 @@ pub fn mount_overlayfs(
         mount_debug(format!("fsopen failed: {e:#}"));
         warn!("fsopen mount failed: {:#}, fallback to mount", e);
         let mut data = format!("lowerdir={lowerdir_config},override_creds=off");
+        if let Some(context) = overlay_context_for(dest.as_ref()) {
+            data = format!("{data},context={context}");
+        }
         if let (Some(upperdir), Some(workdir)) = (upperdir, workdir) {
             data = format!("{data},upperdir={upperdir},workdir={workdir}");
         }

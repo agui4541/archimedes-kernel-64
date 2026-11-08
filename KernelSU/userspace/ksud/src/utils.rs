@@ -114,10 +114,17 @@ pub fn is_safe_mode() -> bool {
     if safemode {
         return true;
     }
+    // phh GSI does not reliably deliver the boot-completed callback to ksud.
+    // A persistent bootguard marker would therefore force safe mode forever,
+    // skipping module pruning and all post-fs-data work on every boot.
+    let is_phh_gsi = getprop("ro.product.device")
+        .as_deref()
+        .map(|value| value.starts_with("phhgsi") || value.contains("phh"))
+        .unwrap_or(false);
     let bootguard = std::path::Path::new(defs::WORKING_DIR)
         .join(defs::BOOTGUARD_FILE_NAME)
         .is_file();
-    if bootguard && getprop("ro.build.version.sdk").is_some() {
+    if bootguard && !is_phh_gsi && getprop("ro.build.version.sdk").is_some() {
         log::warn!("bootguard marker found; entering safe mode after incomplete boot");
         return true;
     }

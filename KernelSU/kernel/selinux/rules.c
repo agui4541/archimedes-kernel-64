@@ -150,6 +150,41 @@ void apply_kernelsu_rules()
 	ksu_allow(db, "init", "mnt_vendor_file", "dir", "mounton");
 	ksu_allow(db, "init", "rootfs", "dir", "mounton");
 	ksu_allow(db, "init", "adb_data_file", "dir", "mounton");
+	// OverlayFS context= labels the new superblock.  Android 9's stock
+	// policy denies init relabelto on filesystem even though mounton is
+	// allowed, so an enforcing system rejects an otherwise valid overlay.
+	ksu_allow(db, "init", "system_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "vendor_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "mnt_vendor_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "product_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "system_ext_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "odm_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "oemfs_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "system_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "vendor_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "mnt_vendor_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "product_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "system_ext_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "odm_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "oemfs_file", "filesystem", "relabelfrom");
+
+	// OverlayFS also needs filesystem associate permission so the
+	// labeled superblock can associate system/vendor files while enforcing.
+	ksu_allow(db, "system_file", "system_file", "filesystem", "associate");
+	ksu_allow(db, "vendor_file", "vendor_file", "filesystem", "associate");
+	ksu_allow(db, "mnt_vendor_file", "mnt_vendor_file", "filesystem", "associate");
+	ksu_allow(db, "product_file", "product_file", "filesystem", "associate");
+	ksu_allow(db, "system_ext_file", "system_ext_file", "filesystem", "associate");
+	ksu_allow(db, "odm_file", "odm_file", "filesystem", "associate");
+	ksu_allow(db, "oemfs_file", "oemfs_file", "filesystem", "associate");
+
+	ksu_allow(db, "init", "system_file", "filesystem", "mount");
+	ksu_allow(db, "init", "vendor_file", "filesystem", "mount");
+	ksu_allow(db, "init", "mnt_vendor_file", "filesystem", "mount");
+	ksu_allow(db, "init", "product_file", "filesystem", "mount");
+	ksu_allow(db, "init", "system_ext_file", "filesystem", "mount");
+	ksu_allow(db, "init", "odm_file", "filesystem", "mount");
+	ksu_allow(db, "init", "oemfs_file", "filesystem", "mount");
 	// Android 9 creates VNDK and RIL child mounts on tmpfs; init must
 	// be able to reattach their private mirrors after the root overlay.
 	ksu_allow(db, "init", "tmpfs", "file", "mounton");
