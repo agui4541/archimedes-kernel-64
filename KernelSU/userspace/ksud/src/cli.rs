@@ -25,18 +25,24 @@ enum Commands {
         command: Module,
     },
 
+    /// Trigger early overlay mount before post-fs actions
+    #[command(hide = true)]
+    PreMount,
+
+    #[command(hide = true)]
+    PreMountWorker,
+
     /// Trigger `post-fs-data` event
     PostFsData,
 
     /// Trigger `service` event
     Services,
 
+    #[command(hide = true)]
+    MountWatch,
+
     /// Trigger `boot-complete` event
     BootCompleted,
-
-    /// Internal overlay rescue watchdog
-    #[command(hide = true)]
-    OverlayWatchdog,
 
     /// Install KernelSU userspace component to system
     Install {
@@ -296,9 +302,10 @@ pub fn run() -> Result<()> {
     log::info!("command: {:?}", cli.command);
 
     let result = match cli.command {
+        Commands::PreMount => init_event::on_pre_mount(),
+        Commands::PreMountWorker => init_event::on_pre_mount_worker(),
         Commands::PostFsData => init_event::on_post_data_fs(),
         Commands::BootCompleted => init_event::on_boot_completed(),
-        Commands::OverlayWatchdog => init_event::overlay_watchdog(),
 
         Commands::Module { command } => {
             #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -323,6 +330,7 @@ pub fn run() -> Result<()> {
             Sepolicy::Check { sepolicy } => crate::sepolicy::check_rule(&sepolicy),
         },
         Commands::Services => init_event::on_services(),
+        Commands::MountWatch => init_event::mount_watch(),
         Commands::Profile { command } => match command {
             Profile::GetSepolicy { package } => crate::profile::get_sepolicy(package),
             Profile::SetSepolicy { package, policy } => {

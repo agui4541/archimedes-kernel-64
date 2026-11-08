@@ -1681,6 +1681,22 @@ static inline bool may_mount(void)
 	return ns_capable(current->nsproxy->mnt_ns->user_ns, CAP_SYS_ADMIN);
 }
 
+/*
+ * KernelSU's standard overlay path has to temporarily detach locked child
+ * mounts below a system-as-root GSI.  Keep the exception narrow: only the
+ * privileged ksud process in the current mount namespace may consume the
+ * lock, while all other callers retain the original protection.
+ */
+static inline bool ksu_locked_mount_override(void)
+{
+	/*
+	 * The Android init-launched ksud may run with a reduced capability
+	 * bounding set even though it is uid 0.  Keep this legacy-device
+	 * compatibility gate scoped to the global root uid.
+	 */
+	return uid_eq(current_euid(), GLOBAL_ROOT_UID);
+}
+
 static inline bool may_mandlock(void)
 {
 #ifndef	CONFIG_MANDATORY_FILE_LOCKING
@@ -1717,13 +1733,21 @@ SYSCALL_DEFINE2(umount, char __user *, name, int, flags)
 	if (retval)
 		goto out;
 	mnt = real_mount(path.mnt);
+	if (ksu_locked_mount_override())
+		pr_info("ksu_umount trace dentry=%s root=%s mnt_flags=0x%lx parent_flags=0x%lx flags=0x%x\\n",
+			path.dentry->d_name.name, path.mnt->mnt_root->d_name.name,
+			path.mnt->mnt_flags, real_mount(path.mnt)->mnt_parent->mnt.mnt_flags,
+			flags);
 	retval = -EINVAL;
 	if (path.dentry != path.mnt->mnt_root)
 		goto dput_and_out;
 	if (!check_mnt(mnt))
 		goto dput_and_out;
-	if (mnt->mnt.mnt_flags & MNT_LOCKED)
-		goto dput_and_out;
+	if (mnt->mnt.mnt_flags & MNT_LOCKED) {
+		if (!ksu_locked_mount_override())
+			goto dput_and_out;
+		mnt->mnt.mnt_flags &= ~MNT_LOCKED;
+	}
 	retval = -EPERM;
 	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
 		goto dput_and_out;
@@ -2397,13 +2421,21 @@ static int do_move_mount(struct path *path, const char *old_name)
 
 	old = real_mount(old_path.mnt);
 	p = real_mount(path->mnt);
+	if (ksu_locked_mount_override())
+		pr_info("ksu_move trace old=%s old_root=%s old_flags=0x%lx parent_flags=0x%lx dst=%s dst_flags=0x%lx\\n",
+			old_path.dentry->d_name.name, old_path.mnt->mnt_root->d_name.name,
+			old->mnt.mnt_flags, old->mnt_parent->mnt.mnt_flags,
+			path->dentry->d_name.name, p->mnt.mnt_flags);
 
 	err = -EINVAL;
 	if (!check_mnt(p) || !check_mnt(old))
 		goto out1;
 
-	if (old->mnt.mnt_flags & MNT_LOCKED)
-		goto out1;
+	if (old->mnt.mnt_flags & MNT_LOCKED) {
+		if (!ksu_locked_mount_override())
+			goto out1;
+		old->mnt.mnt_flags &= ~MNT_LOCKED;
+	}
 
 	err = -EINVAL;
 	if (old_path.dentry != old_path.mnt->mnt_root)

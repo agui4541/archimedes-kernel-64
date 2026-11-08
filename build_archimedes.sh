@@ -60,6 +60,14 @@ CONFIG_TOOL="$OUT/scripts/config"
 [[ -x "$CONFIG_TOOL" ]] || die 'scripts/config was not built'
 if [[ "$VARIANT" = ksu ]]; then
   "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_KSU
+  # KernelSU's standard mount flow requires mount namespaces.  The original
+  # Archimedes defconfig disables the namespace subsystem, which makes
+  # setns(/proc/1/ns/mnt) and propagation operations fail on the GSI.
+  "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_NAMESPACES
+  "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_UTS_NS
+  "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_PID_NS
+  "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_NET_NS
+  "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_IPC_NS
 else
   # Keep the pure branch genuinely free of KernelSU even if the shared defconfig
   # or a stale configuration enables it by default.

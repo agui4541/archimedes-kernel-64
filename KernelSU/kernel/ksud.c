@@ -39,23 +39,8 @@ static const char KERNEL_SU_RC[] =
 	"    chown root root " KSUD_EXEC_PATH "\n"
 	"    chmod 0755 " KSUD_EXEC_PATH "\n"
 	"    restorecon " KSUD_EXEC_PATH "\n"
+	// Mount modules before the normal post-fs-data scripts and image setup.
 	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " post-fs-data\n"
-	"\n"
-
-	"on nonencrypted\n"
-	"    copy " KSUD_PATH " " KSUD_EXEC_PATH "\n"
-	"    chown root root " KSUD_EXEC_PATH "\n"
-	"    chmod 0755 " KSUD_EXEC_PATH "\n"
-	"    restorecon " KSUD_EXEC_PATH "\n"
-	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " services\n"
-	"\n"
-
-	"on property:vold.decrypt=trigger_restart_framework\n"
-	"    copy " KSUD_PATH " " KSUD_EXEC_PATH "\n"
-	"    chown root root " KSUD_EXEC_PATH "\n"
-	"    chmod 0755 " KSUD_EXEC_PATH "\n"
-	"    restorecon " KSUD_EXEC_PATH "\n"
-	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " services\n"
 	"\n"
 
 	"on property:sys.boot_completed=1\n"
@@ -63,9 +48,8 @@ static const char KERNEL_SU_RC[] =
 	"    chown root root " KSUD_EXEC_PATH "\n"
 	"    chmod 0755 " KSUD_EXEC_PATH "\n"
 	"    restorecon " KSUD_EXEC_PATH "\n"
-	// post-fs-data is a one-shot mount phase. Do not replay it from the
-	// boot_completed property: a second overlay mount races zygote and can
-	// leave shared child mounts detached on legacy Android 9 kernels.
+	// post-fs-data is a one-shot phase; do not replay module mounts on
+	// boot_completed, which races zygote and child mount creation.
 	"    exec u:r:init:s0 root -- " KSUD_EXEC_PATH " boot-completed\n"
 	"\n"
 

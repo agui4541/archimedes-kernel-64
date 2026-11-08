@@ -64,6 +64,28 @@ fn mount_debug(message: impl AsRef<str>) {
     }
 }
 
+fn capture_kernel_dmesg(tag: &str) {
+    let path = format!("/cache/ksu-dmesg-{tag}.log");
+    if let std::result::Result::Ok(mut file) = File::create(&path) {
+        let _ = writeln!(file, "capture-start");
+        for command in ["/system/bin/dmesg", "/sbin/dmesg", "dmesg"] {
+            match std::process::Command::new(command).output() {
+                std::result::Result::Ok(output) if output.status.success() => {
+                    let _ = file.write_all(&output.stdout);
+                    let _ = file.flush();
+                    return;
+                }
+                std::result::Result::Ok(output) => {
+                    let _ = writeln!(file, "{} exit={}", command, output.status);
+                }
+                std::result::Result::Err(error) => {
+                    let _ = writeln!(file, "{} error={error:#}", command);
+                }
+            }
+        }
+    }
+}
+
 pub fn mount_ext4(source: impl AsRef<Path>, target: impl AsRef<Path>) -> Result<()> {
     let new_loopback = loopdev::LoopControl::open()?
         .next_free()
@@ -232,6 +254,36 @@ pub fn bind_mount(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub fn bind_mount_shallow(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
+    info!(
+        "shallow bind mount {} -> {}",
+        from.as_ref().display(),
+        to.as_ref().display()
+    );
+    // A root lower mirror must not clone child mounts. They remain attached
+    // below the destination mount and are visible through the overlay, while
+    // the private mirror prevents the new overlay from propagating back into
+    // its own lower tree.
+    if let std::result::Result::Ok(tree) = open_tree(
+        CWD,
+        from.as_ref(),
+        OpenTreeFlags::OPEN_TREE_CLOEXEC | OpenTreeFlags::OPEN_TREE_CLONE,
+    ) {
+        move_mount(
+            tree.as_fd(),
+            "",
+            CWD,
+            to.as_ref(),
+            MoveMountFlags::MOVE_MOUNT_F_EMPTY_PATH,
+        )?;
+    } else {
+        mount(from.as_ref(), to.as_ref(), "", MountFlags::BIND, "")?;
+    }
+    Ok(())
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn make_mount_slave(path: impl AsRef<Path>) -> Result<()> {
     let target = CString::new(path.as_ref().as_os_str().as_encoded_bytes())?;
@@ -387,31 +439,8 @@ pub fn mount_overlay(
 ) -> Result<()> {
     info!("mount overlay for {}", root);
     std::env::set_current_dir(root).with_context(|| format!("failed to chdir to {root}"))?;
-    // Keep the target mount's vendor shared propagation. This 4.9 tree rejects
-    // MS_PRIVATE on /system with EBUSY. The lower mirror is made private below,
-    // which prevents the overlay from recursively propagating into its source.
-    // Preserve child mounts before replacing the partition root. On this 4.9
-    // tree open_tree/move_mount is unavailable, so the old implementation
-    // could fail while reattaching one child and then undo the entire root
-    // overlay. Bind each child to a stable mirror first, then reattach it.
-    let mounts = Process::myself()?.mountinfo().with_context(|| "get mountinfo")?;
-    let mut mount_seq = mounts
-        .0
-        .iter()
-        .filter(|m| {
-            m.mount_point.starts_with(root) && !Path::new(&root).starts_with(&m.mount_point)
-        })
-        .filter_map(|m| m.mount_point.to_str().map(str::to_owned))
-        .collect::<Vec<_>>();
-    mount_seq.sort();
-    mount_seq.dedup();
-    let child_mirrors = snapshot_child_mounts(root, &mount_seq)?;
-    mount_debug(format!("child mirrors root={} count={}", root, child_mirrors.len()));
-    if let Err(error) = make_mount_slave(root) {
-        mount_debug(format!("make target slave failed root={} error={error:#}", root));
-    } else {
-        mount_debug(format!("target converted to slave root={}", root));
-    }
+    // Keep the target mount propagation unchanged. The lower mirror is
+    // made private below, so the overlay cannot propagate back into it.
     // The stock root must not be used as its own lowerdir on old 4.9 kernels.
     // Keep a recursive bind in the data namespace and overlay onto the original.
     let root_mirror = Path::new("/data/adb/ksu/overlay-mirrors").join(
@@ -420,43 +449,21 @@ pub fn mount_overlay(
     let _ = std::fs::remove_dir_all(&root_mirror);
     std::fs::create_dir_all(&root_mirror)
         .with_context(|| format!("create root mirror {}", root_mirror.display()))?;
-    if let Err(e) = bind_mount(root, &root_mirror) {
-        for (_, previous) in child_mirrors.iter().rev() { let _ = umount_dir(previous); }
+    if let Err(e) = bind_mount_shallow(root, &root_mirror) {
         return Err(anyhow!("root mirror bind failed for {root}: {e:#}"));
     }
     make_mount_private(&root_mirror)
         .with_context(|| format!("make root mirror private for {root}"))?;
+    // The recursive root mirror retains the original child mounts in the
+    // lower tree. Do not detach and reattach them: on this device that
+    // sequence returns EPERM after the root overlay is installed.
     let stock_root = root_mirror.display().to_string();
-    mount_overlayfs(module_roots, &stock_root, upperdir, workdir, root)
-        .with_context(|| "mount overlayfs for root failed")?;
-    let mut reattached: Vec<String> = Vec::new();
-    for (mount_point, mirror) in child_mirrors.iter() {
-        if !Path::new(mount_point).exists() {
-            let error = anyhow!("child mount target disappeared: {mount_point}");
-            mount_debug(format!("child reattach failed path={} error={error:#}", mount_point));
-            for previous in reattached.iter().rev() {
-                let _ = umount_dir(previous);
-            }
-            for (_, previous) in child_mirrors.iter().rev() {
-                let _ = umount_dir(previous);
-            }
-            let _ = umount_dir(root);
-            return Err(error);
-        }
-        if let Err(move_error) = move_mount_path(mirror, mount_point) {
-            if let Err(bind_error) = bind_mount(mirror, mount_point) {
-                // A compatibility child mount can be denied by legacy SELinux or
-                // by a read-only lower file. Keep the root overlay alive; losing
-                // the whole overlay makes every other module change disappear.
-                mount_debug(format!("child reattach skipped path={} move={move_error:#} bind={bind_error:#}", mount_point));
-                continue;
-            }
-            mount_debug(format!("child reattached by bind path={} move={move_error:#}", mount_point));
-        } else {
-            mount_debug(format!("child reattached by move path={}", mount_point));
-        }
-        reattached.push(mount_point.clone());
+    if let Err(error) = mount_overlayfs(module_roots, &stock_root, upperdir, workdir, root) {
+        mount_debug(format!("root overlay mount failed error={error:#}"));
+        let _ = umount_dir(&root_mirror);
+        return Err(error).with_context(|| "mount overlayfs for root failed");
     }
+    mount_debug(format!("root overlay installed with recursive lower root={}", root));
     Ok(())
 }
 

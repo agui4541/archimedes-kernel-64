@@ -26,8 +26,31 @@ fn mount_partition(partition_name: &str, lowerdir: &Vec<String>) -> Result<()> {
     let mut upperdir = None;
     let system_rw_dir = Path::new(defs::SYSTEM_RW_DIR);
     if system_rw_dir.exists() {
-        workdir = Some(system_rw_dir.join(partition_name).join("workdir"));
-        upperdir = Some(system_rw_dir.join(partition_name).join("upperdir"));
+        // A read-only overlay can replace the partition root, but Android 9's
+        // 4.9 mount namespace rejects reattaching pre-existing child mounts
+        // underneath it. Keep a writable upper/work pair on the module
+        // filesystem so those child mounts can be rebound after the root
+        // overlay is installed.
+        let partition_rw_dir = system_rw_dir.join(partition_name);
+        let work = partition_rw_dir.join("workdir");
+        let upper = partition_rw_dir.join("upperdir");
+        std::fs::create_dir_all(&work)
+            .with_context(|| format!("create overlay workdir {}", work.display()))?;
+        std::fs::create_dir_all(&upper)
+            .with_context(|| format!("create overlay upperdir {}", upper.display()))?;
+        // Overlay upper/work directories live under adb_data_file. Match the
+        // partition label before mounting so enforcing SELinux does not reject
+        // writes or turn the overlay into an unlabeled tree.
+        let stock = Path::new(&partition);
+        if let Ok(context) = restorecon::lgetfilecon(stock) {
+            for path in [&partition_rw_dir, &upper, &work] {
+                if let Err(error) = restorecon::lsetfilecon(path, &context) {
+                    warn!("set overlay context {} failed: {error:#}", path.display());
+                }
+            }
+        }
+        workdir = Some(work);
+        upperdir = Some(upper);
     }
 
     mount::mount_overlay(&partition, lowerdir, workdir, upperdir)
@@ -62,7 +85,11 @@ fn bind_module_partition(module_dir: &str, partition: &str) -> Result<()> {
     let target = Path::new("/").join(partition);
     for entry in entries.flatten() {
         let module = entry.path();
-        if !module.is_dir()
+        // .rw/ stores overlay upper/work directories and is not a user
+        // module. Treating it as one can create empty overlays on odm/product
+        // and gives those mounts an unlabeled SELinux context.
+        if module.file_name().and_then(|name| name.to_str()) == Some(".rw")
+            || !module.is_dir()
             || module.join(defs::DISABLE_FILE_NAME).exists()
             || module.join(defs::SKIP_MOUNT_FILE_NAME).exists()
         {
@@ -77,54 +104,47 @@ fn bind_module_partition(module_dir: &str, partition: &str) -> Result<()> {
 }
 
 
-fn arm_overlay_watchdog() {
-    let active = Path::new(defs::WORKING_DIR).join("overlay-watchdog.active");
-    let done = Path::new(defs::WORKING_DIR).join("overlay-watchdog.done");
-    let _ = std::fs::remove_file(&done);
-    if let Err(e) = std::fs::File::create(&active) {
-        warn!("arm overlay watchdog marker failed: {e:#}");
-        return;
-    }
-    let executable = std::env::current_exe().unwrap_or_else(|_| Path::new("/cache/ksud").to_path_buf());
-    if let Err(e) = std::process::Command::new(executable)
-        .arg("overlay-watchdog")
-        .spawn()
-    {
-        warn!("start overlay watchdog failed: {e:#}");
+fn enter_overlay_mount_context() {
+    let current = std::fs::read_to_string("/proc/self/attr/current")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if current == "u:r:init:s0" {
+        match std::fs::write("/proc/self/attr/current", "u:r:su:s0") {
+            Ok(()) => info!("overlay mount context switched init -> su"),
+            Err(error) => warn!("overlay mount context switch failed: {error:#}"),
+        }
     } else {
-        info!("overlay watchdog armed");
+        info!("overlay mount context={current}");
     }
 }
 
-pub fn overlay_watchdog() -> Result<()> {
-    std::thread::sleep(std::time::Duration::from_secs(90));
-    let active = Path::new(defs::WORKING_DIR).join("overlay-watchdog.active");
-    let done = Path::new(defs::WORKING_DIR).join("overlay-watchdog.done");
-    if active.exists() && !done.exists() {
-        warn!("overlay watchdog timeout; rebooting recovery");
-        let reason = b"recovery\0";
-        let result = unsafe {
-            libc::syscall(
-                libc::SYS_reboot,
-                libc::LINUX_REBOOT_MAGIC1,
-                libc::LINUX_REBOOT_MAGIC2,
-                libc::LINUX_REBOOT_CMD_RESTART2,
-                reason.as_ptr(),
-            )
-        };
-        if result != 0 {
-            warn!("direct recovery reboot failed: {}", std::io::Error::last_os_error());
-            let _ = std::process::Command::new("/system/bin/reboot")
-                .arg("recovery")
-                .spawn();
-        }
-    }
-    Ok(())
-}
 pub fn mount_modules_systemlessly(module_dir: &str) -> Result<()> {
     // OverlayFS is opt-in on this legacy Android 9 device. A stale or partially
     // installed module must never create a root overlay during early boot.
-    let overlay_enabled = Path::new("/data/adb/ksu/overlay.enable").exists();
+    let overlay_requested = Path::new("/data/adb/ksu/overlay.enable").exists();
+    let system_root_image = utils::getprop("ro.build.system_root_image")
+        .as_deref()
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+    let force_overlay = Path::new("/data/adb/ksu/overlay.force").exists();
+    let gsi_overlay_opt_in = Path::new("/data/adb/ksu/overlay.gsi").exists();
+    let is_phh_gsi = utils::getprop("ro.product.device")
+        .as_deref()
+        .map(|v| v.starts_with("phhgsi") || v.contains("phh"))
+        .unwrap_or(false);
+    // phh/GSI system mounts are replaced late by the framework on this
+    // Android 9 device. Root overlayfs is therefore opt-in there; ordinary
+    // KernelSU modules keep the proven per-file bind behavior until the user
+    // explicitly creates overlay.gsi after a clean baseline is verified.
+    let overlay_enabled = overlay_requested
+        && (!system_root_image || force_overlay)
+        && (!is_phh_gsi || gsi_overlay_opt_in);
+    if overlay_requested && is_phh_gsi && !gsi_overlay_opt_in {
+        warn!("phh GSI detected; using bind mounts (create overlay.gsi to opt in)");
+    } else if overlay_requested && system_root_image && !force_overlay {
+        warn!("system-as-root detected; using legacy bind mounts (create overlay.force to opt in)");
+    }
     if !overlay_enabled {
         info!("overlayfs not enabled; using bind fallback");
         for partition in ["system", "vendor", "product", "system_ext", "odm", "oem"] {
@@ -143,7 +163,11 @@ pub fn mount_modules_systemlessly(module_dir: &str) -> Result<()> {
 
     for entry in dir.flatten() {
         let module = entry.path();
-        if !module.is_dir()
+        // .rw/ stores overlay upper/work directories and is not a user
+        // module. Treating it as one can create empty overlays on odm/product
+        // and gives those mounts an unlabeled SELinux context.
+        if module.file_name().and_then(|name| name.to_str()) == Some(".rw")
+            || !module.is_dir()
             || module.join(defs::DISABLE_FILE_NAME).exists()
             || module.join(defs::SKIP_MOUNT_FILE_NAME).exists()
         {
@@ -188,8 +212,140 @@ pub fn mount_modules_systemlessly(module_dir: &str) -> Result<()> {
     Ok(())
 }
 
+fn write_phase(phase: &str) {
+    let _ = std::fs::write("/cache/ksu-post-fs.phase", phase);
+}
+
+fn is_mountpoint(path: &str) -> bool {
+    let wanted = path.trim_end_matches('/');
+    std::fs::read_to_string("/proc/self/mountinfo")
+        .map(|contents| {
+            contents.lines().any(|line| {
+                line.split_whitespace()
+                    .nth(4)
+                    .map(|mountpoint| mountpoint.trim_end_matches('/'))
+                    == Some(wanted)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn is_overlay_mountpoint(path: &str) -> bool {
+    std::fs::read_to_string("/proc/self/mountinfo")
+        .map(|contents| {
+            contents.lines().any(|line| {
+                let target = line.split_whitespace().nth(4);
+                let filesystem = line.split(" - ").nth(1).unwrap_or_default();
+                target == Some(path) && filesystem.starts_with("overlay ")
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn mount_module_image_early() -> Result<bool> {
+    let module_dir = defs::MODULE_DIR;
+    if is_mountpoint(module_dir) {
+        return Ok(true);
+    }
+    let module_img = Path::new(defs::MODULE_IMG);
+    if !module_img.exists() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(module_dir)
+        .with_context(|| format!("create module directory {module_dir}"))?;
+    info!("early mount module image: {} to {}", module_img.display(), module_dir);
+    mount::AutoMountExt4::try_new(defs::MODULE_IMG, module_dir, false)
+        .with_context(|| "early mount module image failed")?;
+    ksucalls::report_module_mounted();
+    Ok(true)
+}
+
+fn mount_early_impl(run_post: bool) -> Result<()> {
+    let _ = std::fs::write(
+        "/cache/ksu-pre-mount.log",
+        format!("entered pre-mount pid={}\n", std::process::id()),
+    );
+    // The `on fs` action can run just before userdata is exposed on this GSI.
+    // Wait briefly for the opt-in marker; otherwise post-fs-data remains the
+    // safe fallback for normal boots.
+    let overlay_marker = Path::new("/data/adb/ksu/overlay.enable");
+    for _ in 0..100 {
+        if overlay_marker.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if !overlay_marker.exists() {
+        info!("pre-mount: overlay marker not available");
+        return if run_post { on_post_data_fs() } else { Ok(()) };
+    }
+    let marker = Path::new(defs::WORKING_DIR).join(defs::PRE_MOUNT_FILE_NAME);
+    let _ = std::fs::remove_file(&marker);
+    if utils::is_safe_mode() {
+        warn!("safe mode, skip early overlay mount");
+        return Ok(());
+    }
+    utils::umask(0);
+    if let Err(error) = utils::switch_mnt_ns(1) {
+        warn!("switch to init mount namespace failed in pre-mount: {error:#}");
+    }
+    assets::ensure_binaries(true).with_context(|| "early overlay binaries")?;
+    if !mount_module_image_early()? {
+        warn!("early overlay has no modules image");
+        return Ok(());
+    }
+    if let Err(e) = restorecon::restorecon() {
+        warn!("early restorecon failed: {e:#}");
+    }
+    if crate::module::load_sepolicy_rule().is_err() {
+        warn!("early load sepolicy.rule failed");
+    }
+    if let Err(e) = mount_modules_systemlessly(defs::MODULE_DIR) {
+        warn!("early systemless mount failed: {e:#}");
+        return Err(e);
+    }
+    let _ = std::fs::write(
+        "/cache/ksu-early-ns.txt",
+        std::fs::read_link("/proc/self/ns/mnt")
+            .map(|v| format!("self_ns={v:?}\n"))
+            .unwrap_or_default(),
+    );
+    if let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") {
+        let _ = std::fs::write("/cache/ksu-early-mountinfo", mountinfo);
+    }
+    std::fs::File::create(&marker)
+        .with_context(|| format!("create early mount marker {}", marker.display()))?;
+    info!("early overlay mount completed");
+    if run_post { on_post_data_fs() } else { Ok(()) }
+}
+
+pub fn on_pre_mount() -> Result<()> {
+    let marker = Path::new(defs::WORKING_DIR).join(defs::PRE_MOUNT_FILE_NAME);
+    if marker.exists() {
+        if is_mountpoint(defs::MODULE_DIR) {
+            return on_post_data_fs();
+        }
+        // A previous boot may have died after writing the marker. Do not
+        // treat that stale marker as proof that modules.img is mounted.
+        let _ = std::fs::remove_file(&marker);
+    }
+    mount_early_impl(true)
+}
+
+pub fn on_pre_mount_worker() -> Result<()> {
+    mount_early_impl(false)
+}
+
 pub fn on_post_data_fs() -> Result<()> {
+    // The init event must mutate the init mount namespace. Some GSI paths
+    // invoke ksud from a child namespace; switching explicitly avoids
+    // mounting modules/overlay where only the helper process can see them.
+    if let Err(error) = utils::switch_mnt_ns(1) {
+        warn!("post-fs-data: switch to init mount namespace failed: {error:#}");
+    }
+    write_phase("post:start");
     ksucalls::report_post_fs_data();
+    write_phase("post:reported");
 
     utils::umask(0);
     let post_fs_done = Path::new(defs::WORKING_DIR).join("post-fs-data.done");
@@ -198,17 +354,20 @@ pub fn on_post_data_fs() -> Result<()> {
         info!("post-fs-data already completed for this boot");
         return Ok(());
     }
+    let pre_mount_done = Path::new(defs::WORKING_DIR).join(defs::PRE_MOUNT_FILE_NAME);
     if !boot_completed {
         let _ = std::fs::remove_file(&post_fs_done);
     }
     let safe_mode = crate::utils::is_safe_mode();
-    if Path::new("/data/adb/ksu/overlay.enable").exists() {
-        // Switch before starting log capture or module scripts. The vendor
-        // 4.9 kernel rejects setns after the post-fs-data process has spawned
-        // helper children.
-        if let Err(error) = utils::switch_mnt_ns(1) {
-            warn!("switch to init mount namespace failed, continuing: {error:#}");
-        }
+    // pre-mount and post-fs-data run in the same ksud process now. The
+    // marker is written only after modules.img and systemless mounts succeed;
+    // re-probing mountinfo here can see a different namespace and re-enter the
+    // image cleanup path, which deadlocks the legacy 4.9 mount code. A stale
+    // marker from a failed boot is not evidence of a live mount.
+    let module_dir_mounted = is_mountpoint(defs::MODULE_DIR);
+    let early_mounted = pre_mount_done.exists() && module_dir_mounted;
+    if !early_mounted {
+        let _ = std::fs::remove_file(&pre_mount_done);
     }
     let bootguard_file = Path::new(defs::WORKING_DIR).join(defs::BOOTGUARD_FILE_NAME);
     let bootguard_enabled = utils::getprop("ro.product.vendor.device")
@@ -223,10 +382,12 @@ pub fn on_post_data_fs() -> Result<()> {
         }
     }
 
+    write_phase("post:before_bootlog");
     #[cfg(unix)]
     let _ = catch_bootlog("logcat", vec!["logcat"]);
     #[cfg(unix)]
     let _ = catch_bootlog("dmesg", vec!["dmesg", "-w"]);
+    write_phase("post:after_bootlog");
 
     if utils::has_magisk() {
         warn!("Magisk detected, skip post-fs-data!");
@@ -239,6 +400,7 @@ pub fn on_post_data_fs() -> Result<()> {
         // becuase we may need to operate the module dir in safe mode
         warn!("safe mode, skip common post-fs-data.d scripts");
     } else {
+        write_phase("post:before_common_scripts");
         // Then exec common post-fs-data scripts
         if let Err(e) = crate::module::exec_common_scripts("post-fs-data.d", true) {
             warn!("exec common post-fs-data scripts failed: {}", e);
@@ -250,45 +412,39 @@ pub fn on_post_data_fs() -> Result<()> {
     let module_dir = defs::MODULE_DIR;
     let module_update_flag = Path::new(defs::WORKING_DIR).join(defs::UPDATE_FILE_NAME);
 
-    // modules.img is the default image
-    let mut target_update_img = &module_img;
+    write_phase("post:before_image");
+    if !module_dir_mounted {
+        // modules.img is the default image. Never clean a directory that is
+        // already a mounted modules image: doing so can return EBUSY and can
+        // destroy the active module view on this legacy Android 9 GSI.
+        let mut target_update_img = &module_img;
+        ensure_clean_dir(module_dir)?;
+        assets::ensure_binaries(true).with_context(|| "Failed to extract bin assets")?;
 
-    // we should clean the module mount point if it exists
-    ensure_clean_dir(module_dir)?;
-
-    assets::ensure_binaries(true).with_context(|| "Failed to extract bin assets")?;
-
-    if Path::new(module_update_img).exists() {
-        if module_update_flag.exists() {
-            // if modules_update.img exists, and the the flag indicate this is an update
-            // this make sure that if the update failed, we will fallback to the old image
-            // if we boot succeed, we will rename the modules_update.img to modules.img #on_boot_complete
-            target_update_img = &module_update_img;
-            // Keep the flag until the image is mounted successfully.  The
-            // first post-fs-data event can run before /data is ready; if the
-            // mount fails, the late retry must still treat this as an update.
-        } else {
-            // if modules_update.img exists, but the flag not exist, we should delete it
-            std::fs::remove_file(module_update_img)?;
+        if Path::new(module_update_img).exists() {
+            if module_update_flag.exists() {
+                target_update_img = &module_update_img;
+            } else {
+                std::fs::remove_file(module_update_img)?;
+            }
         }
+
+        if !Path::new(target_update_img).exists() {
+            return Ok(());
+        }
+
+        info!("mount module image: {target_update_img} to {module_dir}");
+        mount::AutoMountExt4::try_new(target_update_img, module_dir, false)
+            .with_context(|| "mount module image failed".to_string())?;
+
+        if target_update_img == &module_update_img {
+            std::fs::remove_file(module_update_flag)?;
+        }
+        ksucalls::report_module_mounted();
+    } else {
+        info!("module image already mounted; keep the active module filesystem");
     }
-
-    if !Path::new(target_update_img).exists() {
-        return Ok(());
-    }
-
-    // we should always mount the module.img to module dir
-    // becuase we may need to operate the module dir in safe mode
-    info!("mount module image: {target_update_img} to {module_dir}");
-    mount::AutoMountExt4::try_new(target_update_img, module_dir, false)
-        .with_context(|| "mount module image failed".to_string())?;
-
-    if target_update_img == &module_update_img {
-        std::fs::remove_file(module_update_flag)?;
-    }
-
-    // tell kernel that we've mount the module, so that it can do some optimization
-    ksucalls::report_module_mounted();
+    write_phase("post:after_image");
 
     // if we are in safe mode, we should disable all modules
     if safe_mode {
@@ -316,31 +472,40 @@ pub fn on_post_data_fs() -> Result<()> {
         warn!("apply root profile sepolicy failed: {}", e);
     }
 
+    write_phase("post:before_tmpfs");
     // mount temp dir
     if let Err(e) = mount::mount_tmpfs(utils::get_tmp_path()) {
         warn!("do temp dir mount failed: {}", e);
     }
 
+    write_phase("post:before_stage_scripts");
     // exec modules post-fs-data scripts
     // TODO: Add timeout
     if let Err(e) = crate::module::exec_stage_script("post-fs-data", true) {
         warn!("exec post-fs-data scripts failed: {}", e);
     }
 
+    write_phase("post:before_system_prop");
     // load system.prop
     if let Err(e) = crate::module::load_system_prop() {
         warn!("load system.prop failed: {}", e);
     }
 
-    // Keep the standard early mount point: modules may need their files before
-    // zygote starts. The separate health watcher only fixes marker cleanup.
-    if Path::new("/data/adb/ksu/overlay.enable").exists() {
-        // The in-process boot-complete callback clears the marker; only the
-        // rescue watchdog is needed during the vulnerable early window.
-        arm_overlay_watchdog();
+    write_phase("post:before_late_mount");
+    if !early_mounted {
+        if Path::new("/data/adb/ksu/overlay.enable").exists() {
+        }
+        if let Err(e) = mount_modules_systemlessly(module_dir) {
+            warn!("do systemless mount failed: {}", e);
+        }
+    } else {
+        info!("skip duplicate systemless mount after on-fs overlay");
     }
-    if let Err(e) = mount_modules_systemlessly(module_dir) {
-        warn!("do systemless mount failed: {}", e);
+    let executable = std::env::current_exe().unwrap_or_else(|_| Path::new("/cache/ksud").to_path_buf());
+    let _ = std::process::Command::new(executable).arg("mount-watch").spawn();
+    write_phase("post:before_done");
+    if let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") {
+        let _ = std::fs::write("/cache/ksu-post-mountinfo", mountinfo);
     }
     if let Err(e) = std::fs::File::create(&post_fs_done) {
         warn!("create post-fs-data completion marker failed: {e:#}");
@@ -374,15 +539,77 @@ fn run_stage(stage: &str, block: bool) {
     }
 }
 
+pub fn mount_watch() -> Result<()> {
+    use std::io::Write;
+    if let Err(error) = utils::switch_mnt_ns(1) {
+        log::warn!("mount-watch: switch to init mount namespace failed: {error:#}");
+    }
+    let path = "/cache/ksu-mount-watch.log";
+    let mut file = std::fs::File::create(path)?;
+    let mut last: Option<(bool, bool)> = None;
+    for tick in 0..2400u32 {
+        let info = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+        let has_overlay = info.lines().any(|line| line.contains(" - overlay ") && line.contains(" /system "));
+        let has_modules = info.lines().any(|line| line.split_whitespace().nth(4) == Some("/data/adb/modules"));
+        let state = (has_overlay, has_modules);
+        if last != Some(state) {
+            writeln!(file, "tick={} overlay={} modules={}", tick, has_overlay, has_modules)?;
+            file.flush()?;
+            last = Some(state);
+        }
+        // Do not remount from this watcher. On phh/GSI the system mount
+        // graph is still settling around boot-completed; repeated overlay
+        // attempts can race init and make /system/bin/sh unavailable. The
+        // single boot-completed callback is the only reapply point.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    Ok(())
+}
+
 pub fn on_services() -> Result<()> {
+    if let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") {
+        let _ = std::fs::write("/cache/ksu-services-before-mountinfo", mountinfo);
+    }
     info!("on_services triggered!");
     run_stage("service", false);
+    if let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") {
+        let _ = std::fs::write("/cache/ksu-services-after-mountinfo", mountinfo);
+    }
 
     Ok(())
 }
 
 pub fn on_boot_completed() -> Result<()> {
+    if let Err(error) = utils::switch_mnt_ns(1) {
+        warn!("boot-completed: switch to init mount namespace failed: {error:#}");
+    }
+    // phh/GSI late mounts can replace /system after post-fs-data. Re-apply
+    // the requested overlay after boot is complete, but only if the module
+    // image is still mounted and /system is no longer an overlay.
+    if Path::new("/data/adb/ksu/overlay.enable").exists()
+        && is_mountpoint(defs::MODULE_DIR)
+        && !is_overlay_mountpoint("/system")
+    {
+        if let Err(error) = mount_modules_systemlessly(defs::MODULE_DIR) {
+            warn!("boot-completed overlay reapply failed: {error:#}");
+        } else {
+            info!("boot-completed overlay reapply completed");
+        }
+    }
+    let _ = std::fs::write(
+        "/cache/ksu-boot-before-ns.txt",
+        std::fs::read_link("/proc/self/ns/mnt")
+            .map(|v| format!("self_ns={v:?}\n"))
+            .unwrap_or_default(),
+    );
+    if let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") {
+        let _ = std::fs::write("/cache/ksu-boot-before-mountinfo", mountinfo);
+    }
     ksucalls::report_boot_complete();
+    // The marker is only an intra-boot handoff. Leaving it behind makes the
+    // next boot skip the modules.img mount after an early mount failure.
+    let pre_mount_done = Path::new(defs::WORKING_DIR).join(defs::PRE_MOUNT_FILE_NAME);
+    let _ = std::fs::remove_file(pre_mount_done);
     info!("on_boot_completed triggered!");
     let bootguard_file = Path::new(defs::WORKING_DIR).join(defs::BOOTGUARD_FILE_NAME);
     if bootguard_file.exists() {
@@ -412,6 +639,9 @@ pub fn on_boot_completed() -> Result<()> {
     }
 
     run_stage("boot-completed", false);
+    if let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") {
+        let _ = std::fs::write("/cache/ksu-boot-after-mountinfo", mountinfo);
+    }
 
     Ok(())
 }
