@@ -96,12 +96,41 @@ void apply_kernelsu_rules()
 	ksu_allow(db, "init", "adb_data_file", "file", ALL);
 	ksu_allow(db, "init", "adb_data_file", "file", "execute_no_trans");
 	ksu_allow(db, "init", "adb_data_file", "dir", ALL); // #1289
+	// Android 9 module scripts run from init. Allow the generic script
+	// interpreter and module files to execute without a module-specific policy.
+	// The mounted KSU module image may carry system_file labels from the GSI.
+	// init must be able to relabel it back to adb_data_file before scripts run.
+	ksu_allow(db, "init", "system_file", "file", "relabelfrom");
+	ksu_allow(db, "init", "system_file", "dir", "relabelfrom");
+	ksu_allow(db, "init", "system_file", "lnk_file", "relabelfrom");
+	ksu_allow(db, "init", "system_file", "file", "execute");
+	ksu_allow(db, "init", "system_file", "file", "execute_no_trans");
+	ksu_allow(db, "init", "system_file", "file", "open");
+	ksu_allow(db, "init", "system_file", "file", "read");
+	ksu_allow(db, "init", "system_file", "file", "getattr");
+	ksu_allow(db, "init", "system_file", "file", "map");
+	ksu_allow(db, "init", "adb_data_file", "lnk_file", "read");
+	ksu_allow(db, "init", "adb_data_file", "lnk_file", "getattr");
+	ksu_allow(db, "init", "shell_exec", "file", "execute");
+	ksu_allow(db, "init", "shell_exec", "file", "execute_no_trans");
+	ksu_allow(db, "init", "shell_exec", "file", "open");
+	ksu_allow(db, "init", "shell_exec", "file", "read");
+	ksu_allow(db, "init", "shell_exec", "file", "getattr");
+	ksu_allow(db, "init", "shell_exec", "file", "map");
+	ksu_allow(db, "init", "cgroup_bpf", "file", "getattr");
 	ksu_allow(db, "init", "cache_file", "file", ALL);
 	ksu_allow(db, "init", "cache_file", "dir", ALL);
 	ksu_allow(db, "init", "cache_file", "file", "execute_no_trans");
 	ksu_allow(db, "init", KERNEL_SU_DOMAIN, ALL, ALL);
 	// we need to umount modules in zygote
 	ksu_allow(db, "zygote", "adb_data_file", "dir", "search");
+	ksu_allow(db, "zygote", "adb_data_file", "dir", "getattr");
+	// Zygote reads Zygisk payloads directly from the KSU module image.
+	ksu_allow(db, "zygote", "adb_data_file", "file", "getattr");
+	ksu_allow(db, "zygote", "adb_data_file", "file", "open");
+	ksu_allow(db, "zygote", "adb_data_file", "file", "read");
+	ksu_allow(db, "zygote", "adb_data_file", "file", "map");
+ 
 
 	// copied from Magisk rules
 	// suRights
@@ -139,6 +168,67 @@ void apply_kernelsu_rules()
 	ksu_allow(db, "init", "loop_control_device", "chr_file", ALL);
 	ksu_allow(db, "init", "loop_device", "blk_file", ALL);
 	ksu_allow(db, "init", "system_file", "file", "mounton");
+	ksu_allow(db, "init", "vendor_file", "file", "mounton");
+	ksu_allow(db, "init", "mnt_vendor_file", "file", "mounton");
+	ksu_allow(db, "init", "rootfs", "file", "mounton");
+	ksu_allow(db, "init", "adb_data_file", "file", "mounton");
+	// OverlayFS mounts the partition roots from init. Android 9 labels
+	// vendor/odm as vendor_file and uses system_file for product/system.
+	ksu_allow(db, "init", "system_file", "dir", "mounton");
+	ksu_allow(db, "init", "vendor_file", "dir", "mounton");
+	ksu_allow(db, "init", "mnt_vendor_file", "dir", "mounton");
+	ksu_allow(db, "init", "rootfs", "dir", "mounton");
+	ksu_allow(db, "init", "adb_data_file", "dir", "mounton");
+	// OverlayFS context= labels the new superblock.  Android 9's stock
+	// policy denies init relabelto on filesystem even though mounton is
+	// allowed, so an enforcing system rejects an otherwise valid overlay.
+	ksu_allow(db, "init", "system_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "vendor_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "mnt_vendor_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "product_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "system_ext_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "odm_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "oemfs_file", "filesystem", "relabelto");
+	ksu_allow(db, "init", "system_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "vendor_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "mnt_vendor_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "product_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "system_ext_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "odm_file", "filesystem", "relabelfrom");
+	ksu_allow(db, "init", "oemfs_file", "filesystem", "relabelfrom");
+
+	// OverlayFS also needs filesystem associate permission so the
+	// labeled superblock can associate system/vendor files while enforcing.
+	ksu_allow(db, "system_file", "system_file", "filesystem", "associate");
+	ksu_allow(db, "vendor_file", "vendor_file", "filesystem", "associate");
+	ksu_allow(db, "mnt_vendor_file", "mnt_vendor_file", "filesystem", "associate");
+	ksu_allow(db, "product_file", "product_file", "filesystem", "associate");
+	ksu_allow(db, "system_ext_file", "system_ext_file", "filesystem", "associate");
+	ksu_allow(db, "odm_file", "odm_file", "filesystem", "associate");
+	ksu_allow(db, "oemfs_file", "oemfs_file", "filesystem", "associate");
+
+	// Android 9 app domains query superblock metadata. OverlayFS carries
+	// the partition file context on its filesystem object, so preserve the
+	// stock getattr behavior for all partition overlay contexts.
+	ksu_allow(db, ALL, "system_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "vendor_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "mnt_vendor_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "product_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "system_ext_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "odm_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "oemfs_file", "filesystem", "getattr");
+
+	ksu_allow(db, "init", "system_file", "filesystem", "mount");
+	ksu_allow(db, "init", "vendor_file", "filesystem", "mount");
+	ksu_allow(db, "init", "mnt_vendor_file", "filesystem", "mount");
+	ksu_allow(db, "init", "product_file", "filesystem", "mount");
+	ksu_allow(db, "init", "system_ext_file", "filesystem", "mount");
+	ksu_allow(db, "init", "odm_file", "filesystem", "mount");
+	ksu_allow(db, "init", "oemfs_file", "filesystem", "mount");
+	// Android 9 creates VNDK and RIL child mounts on tmpfs; init must
+	// be able to reattach their private mirrors after the root overlay.
+	ksu_allow(db, "init", "tmpfs", "file", "mounton");
+	ksu_allow(db, "init", "tmpfs", "dir", "mounton");
 
 	// Allow all binder transactions
 	ksu_allow(db, ALL, KERNEL_SU_DOMAIN, "binder", ALL);

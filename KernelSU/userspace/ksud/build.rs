@@ -5,17 +5,20 @@ use std::path::Path;
 use std::process::Command;
 
 fn get_git_version() -> Result<(u32, String), std::io::Error> {
-    let output = Command::new("git")
-        .args(["rev-list", "--count", "HEAD"])
-        .output()?;
-
-    let output = output.stdout;
-    let version_code = String::from_utf8(output).expect("Failed to read git count stdout");
-    let version_code: u32 = version_code
-        .trim()
-        .parse()
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "Failed to parse git count"))?;
-    let version_code = 10000 + 200 + version_code; // For historical reasons
+    // The kernel side of this Archimedes tree is pinned to KernelSU 11872.
+    // The upstream git-count scheme produced 10310 for this checkout, which
+    // makes ZygiskNext reject an otherwise compatible userspace daemon. Keep
+    // the userspace code aligned with the kernel, while allowing CI or a
+    // downstream build to override it explicitly.
+    let version_code = match env::var("KSU_VERSION_CODE") {
+        Ok(value) => value.trim().parse().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to parse KSU_VERSION_CODE",
+            )
+        })?,
+        Err(_) => 11872,
+    };
 
     let version_name = String::from_utf8(
         Command::new("git")

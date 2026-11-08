@@ -26,6 +26,13 @@ command -v python3 >/dev/null 2>&1 || die 'python3 is required'
 command -v "${CROSS_COMPILE}gcc" >/dev/null 2>&1 || die "missing ${CROSS_COMPILE}gcc"
 [[ "$OUT" != "$ROOT" && "$OUT" != / && -n "$OUT" ]] || die 'unsafe OUT path'
 
+# The checkout contains a materialized KernelSU copy used by Kbuild. Keep the
+# generated rc hook in lockstep with the source copy; otherwise a source edit
+# can silently miss the actual build input.
+if ! cmp -s "$ROOT/KernelSU/kernel/ksud.c" "$ROOT/drivers/kernelsu/ksud.c"; then
+  die 'KernelSU ksud.c copies differ; sync KernelSU/kernel and drivers/kernelsu before building'
+fi
+
 case "$VARIANT" in
   pure)
     DEFCONFIG=k61v1_64_archimedes_defconfig
@@ -60,6 +67,14 @@ CONFIG_TOOL="$OUT/scripts/config"
 [[ -x "$CONFIG_TOOL" ]] || die 'scripts/config was not built'
 if [[ "$VARIANT" = ksu ]]; then
   "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_KSU
+  # KernelSU's standard mount flow requires mount namespaces.  The original
+  # Archimedes defconfig disables the namespace subsystem, which makes
+  # setns(/proc/1/ns/mnt) and propagation operations fail on the GSI.
+  "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_NAMESPACES
+  "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_UTS_NS
+  "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_PID_NS
+  "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_NET_NS
+  "$CONFIG_TOOL" --file "$OUT/.config" --enable CONFIG_IPC_NS
 else
   # Keep the pure branch genuinely free of KernelSU even if the shared defconfig
   # or a stale configuration enables it by default.
