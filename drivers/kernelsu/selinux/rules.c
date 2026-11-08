@@ -178,6 +178,17 @@ void apply_kernelsu_rules()
 	ksu_allow(db, "odm_file", "odm_file", "filesystem", "associate");
 	ksu_allow(db, "oemfs_file", "oemfs_file", "filesystem", "associate");
 
+	// Android 9 app domains query superblock metadata. OverlayFS carries
+	// the partition file context on its filesystem object, so preserve the
+	// stock getattr behavior for all partition overlay contexts.
+	ksu_allow(db, ALL, "system_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "vendor_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "mnt_vendor_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "product_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "system_ext_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "odm_file", "filesystem", "getattr");
+	ksu_allow(db, ALL, "oemfs_file", "filesystem", "getattr");
+
 	ksu_allow(db, "init", "system_file", "filesystem", "mount");
 	ksu_allow(db, "init", "vendor_file", "filesystem", "mount");
 	ksu_allow(db, "init", "mnt_vendor_file", "filesystem", "mount");
