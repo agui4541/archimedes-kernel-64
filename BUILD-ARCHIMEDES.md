@@ -27,3 +27,26 @@ python3 package_archimedes_boot.py \
 The packager requires `bootopt=64S3,32S1,64S1`, Android boot header v1,
 2048-byte pages, the tested display DTB, and an exact 32 MiB output. It does
 not alter partitions or reboot a device.
+
+## KernelSU userspace pairing
+
+The Archimedes boot image is an Android v1 image containing only the kernel and
+known-good display DTB; it has no ramdisk. Therefore it cannot carry `ksud`.
+A KernelSU boot must always be released together with the `ksud` binary built
+from the same KernelSU source revision. Installing only the boot image leaves
+whatever old `/cache/ksud` and `/data/adb/ksud` happen to be on the device.
+
+In TWRP, install the matching userspace before booting Android:
+
+```sh
+adb push ksud /tmp/ksud
+adb shell 'cp /tmp/ksud /cache/ksud; cp /tmp/ksud /data/adb/ksud; chmod 0755 /cache/ksud /data/adb/ksud; sync'
+adb shell 'sha256sum /cache/ksud /data/adb/ksud'
+```
+
+Both hashes must match the release manifest. After boot, verify that
+`/system/priv-app` is an `overlay` mount and that the KernelSU manager reports
+`Working`; a module marker under the overlaid directory should be readable.
+The current GSI path deliberately uses directory overlay mounts and bind
+fallbacks because this 4.9 kernel returns `ENOSYS` for the newer `fsopen`
+interface.
