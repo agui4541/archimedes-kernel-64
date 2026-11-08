@@ -281,6 +281,11 @@ fn enter_overlay_mount_context() {
 }
 
 pub fn mount_modules_systemlessly(module_dir: &str) -> Result<()> {
+    // Init launches ksud in the init SELinux domain. Switch to KernelSU's
+    // permissive domain before walking an unlabeled ext4 modules image;
+    // otherwise restorecon sees an empty tree and the overlay lowerdir keeps
+    // the unlabeled context.
+    enter_overlay_mount_context();
     // OverlayFS is opt-in on this legacy Android 9 device. A stale or partially
     // installed module must never create a root overlay during early boot.
     let overlay_requested = Path::new("/data/adb/ksu/overlay.enable").exists();
@@ -479,6 +484,7 @@ fn mount_early_impl(run_post: bool) -> Result<()> {
     if let Err(error) = utils::switch_mnt_ns(1) {
         warn!("switch to init mount namespace failed in pre-mount: {error:#}");
     }
+    enter_overlay_mount_context();
     assets::ensure_binaries(true).with_context(|| "early overlay binaries")?;
     if !mount_module_image_early()? {
         warn!("early overlay has no modules image");
@@ -533,6 +539,7 @@ pub fn on_post_data_fs() -> Result<()> {
     if let Err(error) = utils::switch_mnt_ns(1) {
         warn!("post-fs-data: switch to init mount namespace failed: {error:#}");
     }
+    enter_overlay_mount_context();
     write_phase("post:start");
     ksucalls::report_post_fs_data();
     write_phase("post:reported");
@@ -643,6 +650,12 @@ pub fn on_post_data_fs() -> Result<()> {
         ksucalls::report_module_mounted();
     } else {
         info!("module image already mounted; keep the active module filesystem");
+    }
+    // The first restorecon pass can race the legacy loop mount on Android 9.
+    // Retry after the image is known to be mounted, before overlay lowerdirs
+    // are installed, so an unlabeled image is repaired in the same boot.
+    if let Err(e) = restorecon::restorecon() {
+        warn!("post-image restorecon failed: {e:#}");
     }
     write_phase("post:after_image");
 
