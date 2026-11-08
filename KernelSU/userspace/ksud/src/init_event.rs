@@ -1,6 +1,6 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use log::{info, warn};
-use std::{collections::HashMap, path::Path};
+use std::path::Path;
 
 use crate::module::prune_modules;
 use crate::{
@@ -74,70 +74,10 @@ fn bind_module_files(module_dir: &str) -> Result<()> {
 }
 
 pub fn mount_modules_systemlessly(module_dir: &str) -> Result<()> {
-    let kernel_release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
-    if kernel_release.starts_with("4.9.") {
-        bind_module_files(module_dir)?;
-        return Ok(());
-    }
-    // construct overlay mount params
-    let dir = std::fs::read_dir(module_dir);
-    let Ok(dir) = dir else {
-        bail!("open {} failed", defs::MODULE_DIR);
-    };
-
-    let mut system_lowerdir: Vec<String> = Vec::new();
-
-    let partition = vec!["vendor", "product", "system_ext", "odm", "oem"];
-    let mut partition_lowerdir: HashMap<String, Vec<String>> = HashMap::new();
-    for ele in &partition {
-        partition_lowerdir.insert((*ele).to_string(), Vec::new());
-    }
-
-    for entry in dir.flatten() {
-        let module = entry.path();
-        if !module.is_dir() {
-            continue;
-        }
-        let disabled = module.join(defs::DISABLE_FILE_NAME).exists();
-        if disabled {
-            info!("module: {} is disabled, ignore!", module.display());
-            continue;
-        }
-        let skip_mount = module.join(defs::SKIP_MOUNT_FILE_NAME).exists();
-        if skip_mount {
-            info!("module: {} skip_mount exist, skip!", module.display());
-            continue;
-        }
-
-        let module_system = Path::new(&module).join("system");
-        if module_system.is_dir() {
-            system_lowerdir.push(format!("{}", module_system.display()));
-        }
-
-        for part in &partition {
-            // if /partition is a mountpoint, we would move it to $MODPATH/$partition when install
-            // otherwise it must be a symlink and we don't need to overlay!
-            let part_path = Path::new(&module).join(part);
-            if part_path.is_dir() {
-                if let Some(v) = partition_lowerdir.get_mut(*part) {
-                    v.push(format!("{}", part_path.display()));
-                }
-            }
-        }
-    }
-
-    // mount /system first
-    if let Err(e) = mount_partition("system", &system_lowerdir) {
-        warn!("mount system failed: {:#}", e);
-    }
-
-    // mount other partitions
-    for (k, v) in partition_lowerdir {
-        if let Err(e) = mount_partition(&k, &v) {
-            warn!("mount {k} failed: {:#}", e);
-        }
-    }
-
+    // This checkout is the Archimedes 4.9 bind baseline. Do not probe
+    // /proc/sys/kernel/osrelease from init: the GSI policy denies that read,
+    // which silently selected the overlay path and left modules unapplied.
+    bind_module_files(module_dir)?;
     Ok(())
 }
 
@@ -145,17 +85,6 @@ pub fn on_post_data_fs() -> Result<()> {
     ksucalls::report_post_fs_data();
 
     utils::umask(0);
-    let kernel_release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
-    let bootguard_file = Path::new(defs::WORKING_DIR).join(defs::BOOTGUARD_FILE_NAME);
-    let bootguard_enabled = kernel_release.starts_with("4.9.");
-    if bootguard_enabled && !utils::is_safe_mode() {
-        if let Err(e) = std::fs::File::create(&bootguard_file) {
-            warn!("create bootguard marker failed: {e:#}");
-        } else {
-            info!("bootguard marker armed");
-        }
-    }
-
     #[cfg(unix)]
     let _ = catch_bootlog("logcat", vec!["logcat"]);
     #[cfg(unix)]
@@ -309,11 +238,6 @@ pub fn on_services() -> Result<()> {
 pub fn on_boot_completed() -> Result<()> {
     ksucalls::report_boot_complete();
     info!("on_boot_completed triggered!");
-    let bootguard_file = Path::new(defs::WORKING_DIR).join(defs::BOOTGUARD_FILE_NAME);
-    if bootguard_file.exists() {
-        std::fs::remove_file(&bootguard_file).with_context(|| "remove bootguard marker")?;
-        info!("bootguard marker cleared");
-    }
     let module_update_img = Path::new(defs::MODULE_UPDATE_IMG);
     let module_img = Path::new(defs::MODULE_IMG);
     if module_update_img.exists() {

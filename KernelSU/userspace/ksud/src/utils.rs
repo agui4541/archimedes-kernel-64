@@ -114,13 +114,6 @@ pub fn is_safe_mode() -> bool {
     if safemode {
         return true;
     }
-    let bootguard = std::path::Path::new(defs::WORKING_DIR)
-        .join(defs::BOOTGUARD_FILE_NAME)
-        .is_file();
-    if bootguard && getprop("ro.build.version.sdk").is_some() {
-        log::warn!("bootguard marker found; entering safe mode after incomplete boot");
-        return true;
-    }
     let safemode = ksucalls::check_kernel_safemode();
     log::info!("kernel_safemode: {}", safemode);
     safemode
