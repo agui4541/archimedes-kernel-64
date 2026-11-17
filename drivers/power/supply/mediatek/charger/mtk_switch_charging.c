@@ -594,6 +594,9 @@ int mtk_switch_chr_full(struct charger_manager *info)
 
 static int mtk_switch_charging_current(struct charger_manager *info)
 {
+	if (info->chr_type == CHARGER_UNKNOWN)
+		return 0;
+	
 	swchg_select_charging_current_limit(info);
 	return 0;
 }
